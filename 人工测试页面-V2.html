@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>党建工作台账 V2.0 - 人工测试清单</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, 'Microsoft YaHei', sans-serif; background: #f5f5f5; padding: 24px; color: #333; }
+.container { max-width: 1100px; margin: 0 auto; }
+.header { background: linear-gradient(135deg, #CC0000, #A00000); color: #fff; padding: 32px; border-radius: 12px; margin-bottom: 24px; }
+.header h1 { font-size: 28px; margin-bottom: 8px; }
+.header p { opacity: 0.9; font-size: 14px; }
+.section { background: #fff; border-radius: 8px; margin-bottom: 16px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+.section-header { padding: 16px 20px; background: #fafafa; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; gap: 12px; }
+.section-header .num { width: 28px; height: 28px; background: #CC0000; color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: bold; }
+.section-header h2 { font-size: 16px; }
+.test-list { padding: 0; }
+.test-item { display: flex; align-items: flex-start; padding: 12px 20px; border-bottom: 1px solid #f8f8f8; gap: 12px; }
+.test-item:last-child { border-bottom: none; }
+.test-item input[type="checkbox"] { margin-top: 4px; width: 16px; height: 16px; accent-color: #CC0000; cursor: pointer; flex-shrink: 0; }
+.test-item .content { flex: 1; }
+.test-item .title { font-size: 14px; font-weight: 500; margin-bottom: 4px; }
+.test-item .desc { font-size: 12px; color: #888; }
+.test-item .result { font-size: 12px; padding: 2px 8px; border-radius: 4px; font-weight: 500; flex-shrink: 0; margin-top: 2px; }
+.result.pass { background: #f6ffed; color: #52c41a; }
+.result.fail { background: #fff2f0; color: #ff4d4f; }
+.result.warn { background: #fffbe6; color: #faad14; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; margin-left: 8px; }
+.badge.new { background: #e6f7ff; color: #1890ff; }
+.badge.fix { background: #fff7e6; color: #fa8c16; }
+.summary { position: sticky; top: 0; background: #fff; padding: 16px 20px; border-radius: 8px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); display: flex; justify-content: space-between; align-items: center; z-index: 10; }
+.summary-stats { display: flex; gap: 24px; }
+.stat { text-align: center; }
+.stat .val { font-size: 24px; font-weight: bold; }
+.stat .label { font-size: 12px; color: #888; }
+.stat.total .val { color: #333; }
+.stat.passed .val { color: #52c41a; }
+.stat.failed .val { color: #ff4d4f; }
+.progress-bar { height: 6px; background: #f0f0f0; border-radius: 3px; margin-top: 8px; overflow: hidden; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, #52c41a, #73d13d); border-radius: 3px; transition: width 0.3s; }
+button { background: #CC0000; color: #fff; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+button:hover { background: #A00000; }
+button.reset { background: #fff; color: #666; border: 1px solid #d9d9d9; }
+button.reset:hover { background: #f5f5f5; }
+.footer { text-align: center; padding: 24px; color: #999; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>🏛️ 党建工作台账应用 V2.0</h1>
+    <p>人工测试清单 · 涵盖所有页面与核心功能 · 重点验证导出样式与人员管理修复</p>
+  </div>
+
+  <div class="summary">
+    <div class="summary-stats">
+      <div class="stat total"><div class="val" id="total">0</div><div class="label">总测试项</div></div>
+      <div class="stat passed"><div class="val" id="passed">0</div><div class="label">已通过</div></div>
+      <div class="stat failed"><div class="val" id="failed">0</div><div class="label">待验证/失败</div></div>
+    </div>
+    <div style="width:200px;">
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:#888;"><span>测试进度</span><span id="pct">0%</span></div>
+      <div class="progress-bar"><div class="progress-fill" id="progress" style="width:0%"></div></div>
+    </div>
+    <button class="reset" onclick="resetAll()">重置</button>
+  </div>
+
+  <!-- 1. 数据看板 -->
+  <div class="section">
+    <div class="section-header"><div class="num">1</div><h2>数据看板页面</h2></div>
+    <div class="test-list" id="sec1"></div>
+  </div>
+
+  <!-- 2. 人员管理 -->
+  <div class="section">
+    <div class="section-header"><div class="num">2</div><h2>人员管理页面 <span class="badge fix">BUG修复</span></h2></div>
+    <div class="test-list" id="sec2"></div>
+  </div>
+
+  <!-- 3. 会议管理 -->
+  <div class="section">
+    <div class="section-header"><div class="num">3</div><h2>会议管理页面 <span class="badge new">V2.0多选类型</span></h2></div>
+    <div class="test-list" id="sec3"></div>
+  </div>
+
+  <!-- 4. 谈心谈话 -->
+  <div class="section">
+    <div class="section-header"><div class="num">4</div><h2>谈心谈话页面 <span class="badge new">V2.0新增</span></h2></div>
+    <div class="test-list" id="sec4"></div>
+  </div>
+
+  <!-- 5. 数据管理 -->
+  <div class="section">
+    <div class="section-header"><div class="num">5</div><h2>数据管理页面 <span class="badge new">V2.0备份兼容</span></h2></div>
+    <div class="test-list" id="sec5"></div>
+  </div>
+
+  <!-- 6. 导出功能 -->
+  <div class="section">
+    <div class="section-header"><div class="num">6</div><h2>导出功能（样式优化）<span class="badge fix">重点优化</span></h2></div>
+    <div class="test-list" id="sec6"></div>
+  </div>
+
+  <!-- 7. 操作日志 -->
+  <div class="section">
+    <div class="section-header"><div class="num">7</div><h2>操作日志页面</h2></div>
+    <div class="test-list" id="sec7"></div>
+  </div>
+
+  <div class="footer">
+    党建工作台账 V2.0 · 人工测试清单 · 所有数据本地存储，离线可用
+  </div>
+</div>
+
+<script>
+const tests = [
+  // 1. 数据看板
+  { sec: 'sec1', title: '页面加载正常', desc: '侧边栏、顶部导航栏、主内容区正常显示' },
+  { sec: 'sec1', title: '统计卡片显示', desc: '会议总数、平均出勤率、在职人员总数、本月会议数4个卡片数据正确' },
+  { sec: 'sec1', title: '会议类型饼图', desc: '环形饼图正常渲染，显示各类会议占比' },
+  { sec: 'sec1', title: '月度会议趋势柱状图', desc: '堆叠柱状图正常显示，图例可滚动' },
+  { sec: 'sec1', title: '出勤率排行横向柱状图', desc: '人员出勤率按降序排列，渐变色（红→黄→绿）' },
+  { sec: 'sec1', title: '部门出勤对比柱状图', desc: '各部门出勤率柱状图，悬停Tooltip说明不含支委会' },
+  { sec: 'sec1', title: '年份切换', desc: '选择不同年份，统计数据和图表联动刷新' },
+  { sec: 'sec1', title: '空数据状态', desc: '无数据年份显示Empty空状态组件' },
+
+  // 2. 人员管理
+  { sec: 'sec2', title: '页面加载正常', desc: '工具栏（搜索、筛选、按钮）和人员表格正常显示' },
+  { sec: 'sec2', title: '搜索功能', desc: '输入姓名/电话可实时过滤人员列表' },
+  { sec: 'sec2', title: '部门筛选', desc: '下拉选择部门可筛选对应人员' },
+  { sec: 'sec2', title: '状态筛选', desc: '下拉选择在职/调离/借调/离职可筛选' },
+  { sec: 'sec2', title: '新增人员弹窗', desc: '点击"新增人员"弹窗打开，所有字段正常显示' },
+  { sec: 'sec2', title: '部门/支部自动完成', desc: '部门字段支持下拉选择预设部门，也可手动输入自定义部门' },
+  { sec: 'sec2', title: '编辑人员-部门字段正确回显', desc: '点击编辑按钮，弹窗中部门字段正确显示当前值（非空白）', important: true },
+  { sec: 'sec2', title: '编辑人员-修改保存', desc: '修改职务、电话等字段后保存，表格数据正确更新' },
+  { sec: 'sec2', title: '删除人员（标记离职）', desc: '删除后人员状态变为"离职"，有会议记录时弹出确认框' },
+  { sec: 'sec2', title: '同名离职人员恢复提示', desc: '新增与离职人员同名时弹出恢复/新建选择框' },
+  { sec: 'sec2', title: '批量选择与删除', desc: '勾选复选框后可批量删除，显示选中数量' },
+  { sec: 'sec2', title: '批量导入Excel', desc: '点击批量导入上传xlsx文件可批量添加人员' },
+  { sec: 'sec2', title: '下载导入模板', desc: '下载人员导入模板xlsx文件' },
+  { sec: 'sec2', title: '表格分页', desc: '每页15人，显示总人数，分页切换正常' },
+
+  // 3. 会议管理
+  { sec: 'sec3', title: '页面加载正常', desc: '搜索栏、筛选条件、会议表格正常显示' },
+  { sec: 'sec3', title: '会议类型多选筛选', desc: '下拉可多选会议类型进行筛选（V2.0新功能）' },
+  { sec: 'sec3', title: '新增会议弹窗', desc: '点击新增会议弹窗正常打开，宽度860px' },
+  { sec: 'sec3', title: '会议类型多选', desc: '会议类型支持多选（如同时选"党员大会+主题党日"）' },
+  { sec: 'sec3', title: '一键全选/取消参会人', desc: '一键全选在职人员、选择支委委员、一键取消功能' },
+  { sec: 'sec3', title: '智能解析参会人员', desc: '粘贴参会接龙文本后点击智能解析可自动识别出席/请假人员' },
+  { sec: 'sec3', title: '复用上一条记录', desc: '新增会议时可复用上一次会议的人员、议题等信息' },
+  { sec: 'sec3', title: '参会人员状态切换', desc: '已选人员可切换出席/请假/缺席状态' },
+  { sec: 'sec3', title: '临时参会人员添加', desc: '可手动输入临时参会人员姓名并添加' },
+  { sec: 'sec3', title: '会议地点记忆', desc: '输入新地点后下次自动出现在下拉列表' },
+  { sec: 'sec3', title: '编辑会议', desc: '点击编辑按钮弹窗正确回填所有数据' },
+  { sec: 'sec3', title: '导出年度台账-年份选择', desc: '未选择年份时导出按钮禁用' },
+
+  // 4. 谈心谈话
+  { sec: 'sec4', title: '页面加载正常', desc: 'V2.0新增页面，工具栏和谈话表格正常显示' },
+  { sec: 'sec4', title: '新增谈话弹窗', desc: '点击新增谈话弹窗正常打开，宽度700px' },
+  { sec: 'sec4', title: '谈话方式选择', desc: '个别谈话/集体谈话单选按钮正常' },
+  { sec: 'sec4', title: '谈话类型下拉', desc: '6种谈话类型可选（领导班子、支委、党员等）' },
+  { sec: 'sec4', title: '谈话人/对象联动', desc: '选择谈话人姓名后自动填充职务' },
+  { sec: 'sec4', title: '谈话内容验证', desc: '内容摘要至少10个字，否则提示验证错误' },
+  { sec: 'sec4', title: '编辑谈话记录', desc: '点击编辑弹窗正确回填数据' },
+  { sec: 'sec4', title: '删除谈话记录', desc: '删除前弹出确认框' },
+  { sec: 'sec4', title: '导出谈心谈话台账', desc: '选择年份后可导出Excel台账' },
+
+  // 5. 数据管理
+  { sec: 'sec5', title: '数据备份', desc: '点击"立即备份"下载JSON备份文件' },
+  { sec: 'sec5', title: '数据恢复-文件选择', desc: '选择备份文件后弹出摘要确认框' },
+  { sec: 'sec5', title: '数据恢复-V1旧版迁移', desc: 'V1.0旧备份文件显示"旧版格式—将自动迁移"标签' },
+  { sec: 'sec5', title: '数据恢复-事务处理', desc: '恢复操作使用事务，保证数据一致性' },
+  { sec: 'sec5', title: '数据重置', desc: '输入"确认重置"方可清空所有数据' },
+  { sec: 'sec5', title: '版本信息', desc: '底部显示"党建工作台账应用 v2.0"' },
+
+  // 6. 导出功能
+  { sec: 'sec6', title: '导出看板报告Word', desc: '点击导出下载.docx文件，打开后检查：标题红色大字、表头深红填充白字、隔行变色、排名奖牌标识、出勤率颜色', important: true },
+  { sec: 'sec6', title: 'Word报告-概览统计表', desc: '4个关键指标以大字号红色数字显示在浅红背景单元格中' },
+  { sec: 'sec6', title: 'Word报告-会议类型分布表', desc: '包含会议类型、次数、占比三列，数据正确' },
+  { sec: 'sec6', title: 'Word报告-月度统计表', desc: '12个月数据双列展示，整齐美观' },
+  { sec: 'sec6', title: 'Word报告-出勤率排行榜', desc: '前三名有奖牌标识（🥇🥈🥉），出勤率按颜色标识' },
+  { sec: 'sec6', title: 'Word报告-会议明细表', desc: '包含所有会议记录，出勤率颜色标识（绿≥90%、橙≥70%、红<70%）' },
+  { sec: 'sec6', title: '导出年度台账Excel', desc: '点击导出下载.xlsx文件，包含4个Sheet', important: true },
+  { sec: 'sec6', title: 'Excel-Sheet1会议记录明细', desc: '16列：序号、日期、时间、类型、地点、主持人、记录人、议题、摘要、决议、应到、实到、请假、缺席、出勤率、参会名单' },
+  { sec: 'sec6', title: 'Excel-Sheet2参会考勤统计', desc: '按出勤率降序排列，每人应到/实到/请假/缺席/出勤率' },
+  { sec: 'sec6', title: 'Excel-Sheet3月度汇总', desc: '12个月+全年合计行' },
+  { sec: 'sec6', title: 'Excel-Sheet4会议类型统计', desc: '按次数降序排列各会议类型' },
+  { sec: 'sec6', title: 'Excel样式-表头', desc: '深红色背景(#C00000)、白色粗体字、居中对齐' },
+  { sec: 'sec6', title: 'Excel样式-隔行变色', desc: '偶数行浅红色背景(#FFFBFA)，奇数行白色' },
+  { sec: 'sec6', title: 'Excel样式-合计行', desc: '合计行红色粗体字、浅红背景、上下粗边框' },
+  { sec: 'sec6', title: '导出谈心谈话台账Excel', desc: '点击导出下载.xlsx文件，包含3个Sheet', important: true },
+  { sec: 'sec6', title: '谈心谈话Excel-明细表', desc: '12列含序号、时间、方式、类型、谈话人/对象、联系人、地点、提纲、内容' },
+  { sec: 'sec6', title: '谈心谈话Excel-月度统计', desc: '个别谈话/集体谈话按月统计+全年合计' },
+  { sec: 'sec6', title: '谈心谈话Excel-类型统计', desc: '6种谈话类型按次数统计' },
+  { sec: 'sec6', title: '导出成功提示', desc: '三个导出功能完成后均显示"导出成功"绿色提示' },
+
+  // 7. 操作日志
+  { sec: 'sec7', title: '页面加载正常', desc: '筛选栏和日志表格正常显示' },
+  { sec: 'sec7', title: '按操作类型筛选', desc: '下拉选择操作类型（新增/编辑/删除/导出等）筛选日志' },
+  { sec: 'sec7', title: '按日期范围筛选', desc: '日期范围选择器可筛选指定时间段日志' },
+  { sec: 'sec7', title: '搜索功能', desc: '输入关键词搜索操作描述' },
+  { sec: 'sec7', title: '操作类型彩色标签', desc: '不同操作类型显示不同颜色Tag（绿新增、蓝编辑、红删除、紫导出等）' },
+  { sec: 'sec7', title: '清理旧日志', desc: '可清理90天前的日志，弹出确认框' },
+  { sec: 'sec7', title: '分页功能', desc: '每页20条，显示总条数' },
+];
+
+function render() {
+  tests.forEach((t, i) => {
+    const el = document.getElementById(t.sec);
+    const checked = localStorage.getItem('test_' + i) === '1';
+    const div = document.createElement('div');
+    div.className = 'test-item';
+    div.innerHTML = `
+      <input type="checkbox" ${checked ? 'checked' : ''} data-idx="${i}" onchange="toggle(this)">
+      <div class="content">
+        <div class="title">${t.title}${t.important ? ' 🔴' : ''}</div>
+        <div class="desc">${t.desc}</div>
+      </div>
+    `;
+    el.appendChild(div);
+  });
+  updateStats();
+}
+
+function toggle(cb) {
+  const idx = cb.dataset.idx;
+  localStorage.setItem('test_' + idx, cb.checked ? '1' : '0');
+  updateStats();
+}
+
+function updateStats() {
+  const total = tests.length;
+  let passed = 0;
+  tests.forEach((_, i) => { if (localStorage.getItem('test_' + i) === '1') passed++; });
+  const failed = total - passed;
+  const pct = total > 0 ? Math.round(passed / total * 100) : 0;
+  document.getElementById('total').textContent = total;
+  document.getElementById('passed').textContent = passed;
+  document.getElementById('failed').textContent = failed;
+  document.getElementById('pct').textContent = pct + '%';
+  document.getElementById('progress').style.width = pct + '%';
+}
+
+function resetAll() {
+  tests.forEach((_, i) => localStorage.removeItem('test_' + i));
+  document.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
+  updateStats();
+}
+
+render();
+</script>
+</body>
+</html>

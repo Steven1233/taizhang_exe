@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>党建工作台账 V2.0 - 人工测试</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; }
+    .container { max-width: 1000px; margin: 0 auto; padding: 24px; }
+    h1 { text-align: center; color: #CC0000; margin-bottom: 8px; font-size: 24px; }
+    .subtitle { text-align: center; color: #666; margin-bottom: 24px; font-size: 14px; }
+    .summary { background: #fff; border-radius: 8px; padding: 16px 24px; margin-bottom: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+    .summary h2 { font-size: 16px; margin-bottom: 8px; color: #CC0000; }
+    .summary p { font-size: 13px; color: #666; margin-bottom: 4px; }
+    .section { background: #fff; border-radius: 8px; margin-bottom: 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); overflow: hidden; }
+    .section-header { background: #CC0000; color: #fff; padding: 12px 20px; font-size: 16px; font-weight: 600; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+    .section-header .stats { font-size: 13px; font-weight: 400; }
+    .section-body { padding: 12px 20px; }
+    .test-item { display: flex; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid #f0f0f0; gap: 12px; }
+    .test-item:last-child { border-bottom: none; }
+    .test-item input[type="checkbox"] { width: 18px; height: 18px; margin-top: 2px; cursor: pointer; accent-color: #52c41a; flex-shrink: 0; }
+    .test-item label { flex: 1; cursor: pointer; font-size: 14px; line-height: 1.6; }
+    .test-item label .desc { display: block; font-size: 12px; color: #999; margin-top: 2px; }
+    .test-item .priority { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; flex-shrink: 0; }
+    .priority-high { background: #fff1f0; color: #cf1322; }
+    .priority-medium { background: #fff7e6; color: #d46b08; }
+    .priority-low { background: #f6ffed; color: #389e0d; }
+    .actions { text-align: center; margin-top: 24px; }
+    .actions button { padding: 10px 32px; font-size: 15px; border: none; border-radius: 6px; cursor: pointer; margin: 0 8px; font-weight: 500; }
+    .btn-reset { background: #f0f0f0; color: #333; }
+    .btn-reset:hover { background: #e0e0e0; }
+    .btn-check { background: #CC0000; color: #fff; }
+    .btn-check:hover { background: #a00000; }
+    .result-bar { background: #fff; border-radius: 8px; padding: 16px 24px; margin-top: 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); text-align: center; }
+    .result-bar .pass-rate { font-size: 28px; font-weight: bold; }
+    .result-bar .pass-rate.good { color: #52c41a; }
+    .result-bar .pass-rate.warn { color: #faad14; }
+    .result-bar .pass-rate.bad { color: #ff4d4f; }
+    .issue-list { margin-top: 12px; text-align: left; }
+    .issue-item { padding: 6px 0; font-size: 13px; color: #ff4d4f; }
+    @media print {
+      body { background: #fff; }
+      .section { box-shadow: none; border: 1px solid #e0e0e0; }
+      .actions { display: none; }
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>党建工作台账应用 V2.0</h1>
+  <p class="subtitle">人工功能测试清单 | 测试日期：<span id="testDate"></span></p>
+
+  <div class="summary">
+    <h2>测试说明</h2>
+    <p>1. 应用已启动在 <strong>http://localhost:5174/</strong>（如端口变化请调整）</p>
+    <p>2. 请逐项测试，通过后勾选对应复选框</p>
+    <p>3. 发现问题请在备注中记录，完成后点击"统计结果"</p>
+    <p>4. 红色标签 = 核心功能，橙色 = 重要功能，绿色 = 辅助功能</p>
+  </div>
+
+  <!-- ==================== 数据看板 ==================== -->
+  <div class="section">
+    <div class="section-header" onclick="toggleSection(this)">
+      数据看板 <span class="stats" id="stats-dashboard">0/0</span>
+    </div>
+    <div class="section-body" data-section="dashboard">
+      <div class="test-item">
+        <input type="checkbox" id="d1" data-section="dashboard">
+        <label for="d1">页面正常加载，无报错 <span class="desc">页面显示4个统计卡片和图表区域</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="d2" data-section="dashboard">
+        <label for="d2">4个关键指标卡片正常显示 <span class="desc">会议总数、平均出勤率、在职人员总数、本月会议数</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="d3" data-section="dashboard">
+        <label for="d3">年份选择器可切换，数据随之变化 <span class="desc">切换年份后图表数据更新</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="d4" data-section="dashboard">
+        <label for="d4">会议类型分布饼图正常渲染 <span class="desc">饼图有图例、百分比标签</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="d5" data-section="dashboard">
+        <label for="d5">月度会议趋势堆叠柱状图正常渲染 <span class="desc">可区分不同会议类型，图例可交互</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="d6" data-section="dashboard">
+        <label for="d6">出勤率排行水平柱状图正常显示 <span class="desc">按降序排列，光标悬停显示出席/请假/缺勤次数</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="d7" data-section="dashboard">
+        <label for="d7">部门出勤对比图正常显示 <span class="desc">光标悬停显示"不含支委会出勤数据"说明</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="d8" data-section="dashboard">
+        <label for="d8">"导出看板报告"按钮可点击，导出Word文档 <span class="desc">下载.docx文件，内容完整</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 人员管理 ==================== -->
+  <div class="section">
+    <div class="section-header" onclick="toggleSection(this)">
+      人员管理 <span class="stats" id="stats-members">0/0</span>
+    </div>
+    <div class="section-body" data-section="members">
+      <div class="test-item">
+        <input type="checkbox" id="m1" data-section="members">
+        <label for="m1">页面正常加载，表格显示人员列表 <span class="desc">列：姓名、职务、部门、党小组、党小组组长、支委职务、联系电话、状态、操作</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="m2" data-section="members">
+        <label for="m2">搜索框可搜索姓名/电话 <span class="desc">输入关键词后列表实时过滤</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="m3" data-section="members">
+        <label for="m3">部门筛选下拉框正常，部门值已去重 <span class="desc">下拉选项按拼音排序，无重复值</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="m4" data-section="members">
+        <label for="m4">状态筛选正常（在职/调离/借调/离职） <span class="desc">选择状态后列表过滤</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="m5" data-section="members">
+        <label for="m5">"新增人员"按钮打开表单，填写后提交成功 <span class="desc">包含党小组、支委职务、党小组组长选项</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="m6" data-section="members">
+        <label for="m6">新增人员时，同名离职人员提示恢复 <span class="desc">显示"检测到同名离职人员"弹窗，可选恢复或新建</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="m7" data-section="members">
+        <label for="m7">编辑人员按钮正常，修改后保存成功 <span class="desc">表单预填现有数据，可修改状态</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="m8" data-section="members">
+        <label for="m8">删除人员标记为离职，不物理删除 <span class="desc">弹出确认对话框，删除后状态变为"离职"</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="m9" data-section="members">
+        <label for="m9">批量删除功能正常 <span class="desc">勾选多条记录，点击"批量删除"按钮</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="m10" data-section="members">
+        <label for="m10">"批量导入"上传Excel文件正常 <span class="desc">支持.xlsx/.xls格式</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="m11" data-section="members">
+        <label for="m11">"下载模板"按钮可下载Excel模板 <span class="desc">下载"人员导入模板.xlsx"</span></label>
+        <span class="priority priority-low">辅助</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="m12" data-section="members">
+        <label for="m12">党小组组长标签（蓝色"是"）正常显示 <span class="desc">设为党小组组长的人员显示蓝色标签</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="m13" data-section="members">
+        <label for="m13">支委职务标签（红色）正常显示 <span class="desc">有支委职务的人员显示红色标签</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 会议管理 ==================== -->
+  <div class="section">
+    <div class="section-header" onclick="toggleSection(this)">
+      会议管理 <span class="stats" id="stats-meetings">0/0</span>
+    </div>
+    <div class="section-body" data-section="meetings">
+      <div class="test-item">
+        <input type="checkbox" id="mt1" data-section="meetings">
+        <label for="mt1">页面正常加载，会议记录列表显示 <span class="desc">会议类型标签、日期（中文格式）、地点、主持人、议题、出勤数</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="mt2" data-section="meetings">
+        <label for="mt2">搜索框可搜索议题/主持人/地点 <span class="desc">输入关键词后列表实时过滤</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="mt3" data-section="meetings">
+        <label for="mt3">会议类型多选筛选正常 <span class="desc">可多选会议类型进行过滤</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="mt4" data-section="meetings">
+        <label for="mt4">日期范围筛选正常 <span class="desc">选择起止日期后列表过滤</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="mt5" data-section="meetings">
+        <label for="mt5">"新增会议"按钮打开表单，会议类型可多选 <span class="desc">支持多选"暨党日活动"、"暨青年理论学习小组学习会"等</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="mt6" data-section="meetings">
+        <label for="mt6">会议日期显示为中文格式（YYYY年MM月DD日） <span class="desc">不再是英文日期格式</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="mt7" data-section="meetings">
+        <label for="mt7">会议地点可选择预设，也可输入新地点 <span class="desc">支持"党员活动室"、"预警中心3楼5号会议室"等预设</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="mt8" data-section="meetings">
+        <label for="mt8">参会人员可选择组织人员，支持状态切换 <span class="desc">点击人员标签切换出席/请假/缺席</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="mt9" data-section="meetings">
+        <label for="mt9">"一键全选"、"选择支委委员"、"一键取消"按钮正常 <span class="desc">支委委员按钮只选择有支委职务的人员</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="mt10" data-section="meetings">
+        <label for="mt10">参会人员文本智能识别功能正常 <span class="desc">粘贴接龙文本，解析出席/请假人员</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="mt11" data-section="meetings">
+        <label for="mt11">可添加临时参会人员 <span class="desc">输入临时姓名、回车添加</span></label>
+        <span class="priority priority-low">辅助</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="mt12" data-section="meetings">
+        <label for="mt12">"复用上一条记录"功能正常 <span class="desc">点击后自动填充上一条会议信息</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="mt13" data-section="meetings">
+        <label for="mt13">查看详情弹窗正常，显示完整信息 <span class="desc">包含参会人员状态标签</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="mt14" data-section="meetings">
+        <label for="mt14">编辑会议功能正常 <span class="desc">修改后保存成功</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="mt15" data-section="meetings">
+        <label for="mt15">删除会议记录正常 <span class="desc">弹出确认对话框</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="mt16" data-section="meetings">
+        <label for="mt16">议题列光标悬停可预览完整内容 <span class="desc">Tooltip显示完整议题文本</span></label>
+        <span class="priority priority-low">辅助</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="mt17" data-section="meetings">
+        <label for="mt17">导出年度台账Excel正常 <span class="desc">选择年份后导出，包含会议明细、出勤统计、年度汇总3个Sheet</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 谈心谈话 ==================== -->
+  <div class="section">
+    <div class="section-header" onclick="toggleSection(this)">
+      谈心谈话 <span class="stats" id="stats-talks">0/0</span>
+    </div>
+    <div class="section-body" data-section="talks">
+      <div class="test-item">
+        <input type="checkbox" id="t1" data-section="talks">
+        <label for="t1">页面正常加载，谈话记录列表显示 <span class="desc">列：谈话时间、谈话方式、谈话类型、谈话人、谈话对象、联系人、谈话地点、操作</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="t2" data-section="talks">
+        <label for="t2">"新增谈话"按钮打开表单 <span class="desc">包含谈话方式、类型、谈话人、谈话对象、联系人、时间、提纲、地点、内容摘要</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="t3" data-section="talks">
+        <label for="t3">谈话方式单选（个别谈话/集体谈话）正常 <span class="desc">默认选中"个别谈话"</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="t4" data-section="talks">
+        <label for="t4">谈话类型下拉可选6种类型 <span class="desc">领导班子成员之间、党支部委员之间等</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="t5" data-section="talks">
+        <label for="t5">谈话人/谈话对象可从人员列表选择，自动填充职务 <span class="desc">选择人员后自动填充对应职务</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="t6" data-section="talks">
+        <label for="t6">谈话内容摘要至少10个字校验 <span class="desc">少于10字时提示错误</span></label>
+        <span class="priority priority-low">辅助</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="t7" data-section="talks">
+        <label for="t7">查看详情弹窗正常，显示完整信息 <span class="desc">包含谈话方式标签、类型、谈话人(职务)、谈话对象(职务)、内容摘要</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="t8" data-section="talks">
+        <label for="t8">编辑/删除谈话记录正常 <span class="desc">编辑后保存，删除有确认弹窗</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="t9" data-section="talks">
+        <label for="t9">导出谈心谈话台账Excel正常 <span class="desc">选择年份后导出"谈心谈话台账_XXXX年.xlsx"</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="t10" data-section="talks">
+        <label for="t10">搜索/类型筛选/日期筛选正常 <span class="desc">按谈话人/对象/内容搜索，按类型和日期范围筛选</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 操作日志 ==================== -->
+  <div class="section">
+    <div class="section-header" onclick="toggleSection(this)">
+      操作日志 <span class="stats" id="stats-logs">0/0</span>
+    </div>
+    <div class="section-body" data-section="logs">
+      <div class="test-item">
+        <input type="checkbox" id="l1" data-section="logs">
+        <label for="l1">页面正常加载，日志列表显示 <span class="desc">列：时间、操作类型、操作描述、操作详情、结果</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="l2" data-section="logs">
+        <label for="l2">操作类型标签颜色区分正常 <span class="desc">新增=绿色、编辑=蓝色、删除=红色、导出=紫色</span></label>
+        <span class="priority priority-low">辅助</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="l3" data-section="logs">
+        <label for="l3">操作类型筛选下拉正常 <span class="desc">可选择具体操作类型过滤</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="l4" data-section="logs">
+        <label for="l4">日期范围筛选正常 <span class="desc">选择起止日期过滤日志</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="l5" data-section="logs">
+        <label for="l5">"清理旧日志"功能正常（清理90天前） <span class="desc">弹出确认对话框</span></label>
+        <span class="priority priority-low">辅助</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="l6" data-section="logs">
+        <label for="l6">日志自动记录人员的增删改操作 <span class="desc">在人员管理页面操作后，此处出现对应日志</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 数据管理 ==================== -->
+  <div class="section">
+    <div class="section-header" onclick="toggleSection(this)">
+      数据管理 <span class="stats" id="stats-settings">0/0</span>
+    </div>
+    <div class="section-body" data-section="settings">
+      <div class="test-item">
+        <input type="checkbox" id="s1" data-section="settings">
+        <label for="s1">页面正常加载，显示备份/恢复/重置三张卡片 <span class="desc">每张卡片有说明文字和操作按钮</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="s2" data-section="settings">
+        <label for="s2">"立即备份"可下载JSON备份文件 <span class="desc">文件名格式：党建台账备份_YYYYMMDD_HHmmss.json</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="s3" data-section="settings">
+        <label for="s3">数据恢复功能正常，选择备份文件后恢复 <span class="desc">弹出确认对话框，恢复后页面刷新</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="s4" data-section="settings">
+        <label for="s4">数据重置需输入"确认重置" <span class="desc">输入错误文字无法重置</span></label>
+        <span class="priority priority-medium">重要</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="s5" data-section="settings">
+        <label for="s5">页面底部显示版本号 v2.0 <span class="desc">"党建工作台账应用 v2.0 | 所有数据存储在本地浏览器中"</span></label>
+        <span class="priority priority-low">辅助</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 全局功能 ==================== -->
+  <div class="section">
+    <div class="section-header" onclick="toggleSection(this)">
+      全局功能 <span class="stats" id="stats-global">0/0</span>
+    </div>
+    <div class="section-body" data-section="global">
+      <div class="test-item">
+        <input type="checkbox" id="g1" data-section="global">
+        <label for="g1">左侧导航菜单可正常切换页面 <span class="desc">6个菜单项：数据看板、人员管理、会议管理、谈心谈话、操作日志、数据管理</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="g2" data-section="global">
+        <label for="g2">侧边栏可折叠/展开 <span class="desc">点击左上角菜单图标切换</span></label>
+        <span class="priority priority-low">辅助</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="g3" data-section="global">
+        <label for="g3">主题色为红色（#CC0000） <span class="desc">按钮、选中状态、标题等使用红色主题</span></label>
+        <span class="priority priority-low">辅助</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="g4" data-section="global">
+        <label for="g4">页面刷新后数据不丢失 <span class="desc">数据存储在IndexedDB中，刷新后仍存在</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="g5" data-section="global">
+        <label for="g5">所有操作自动记录操作日志 <span class="desc">增删改、导出等操作均有日志</span></label>
+        <span class="priority priority-high">核心</span>
+      </div>
+      <div class="test-item">
+        <input type="checkbox" id="g6" data-section="global">
+        <label for="g6">应用标题显示"党建工作台账应用" <span class="desc">顶部标题栏和浏览器标签页</span></label>
+        <span class="priority priority-low">辅助</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 结果统计 ==================== -->
+  <div class="actions">
+    <button class="btn-reset" onclick="resetAll()">重置全部</button>
+    <button class="btn-check" onclick="calcResult()">统计结果</button>
+  </div>
+
+  <div class="result-bar" id="resultBar" style="display:none;">
+    <div class="pass-rate" id="passRate"></div>
+    <div id="resultDetail"></div>
+    <div class="issue-list" id="issueList"></div>
+  </div>
+</div>
+
+<script>
+  document.getElementById('testDate').textContent = new Date().toLocaleDateString('zh-CN');
+
+  // 展开/折叠
+  function toggleSection(header) {
+    const body = header.nextElementSibling;
+    body.style.display = body.style.display === 'none' ? '' : 'none';
+  }
+
+  // 实时更新统计
+  document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+    cb.addEventListener('change', updateAllStats);
+  });
+  updateAllStats();
+
+  function updateAllStats() {
+    const sections = ['dashboard', 'members', 'meetings', 'talks', 'logs', 'settings', 'global'];
+    sections.forEach(sec => {
+      const cbs = document.querySelectorAll(`input[data-section="${sec}"]`);
+      const checked = document.querySelectorAll(`input[data-section="${sec}"]:checked`);
+      const el = document.getElementById('stats-' + sec);
+      if (el) el.textContent = checked.length + '/' + cbs.length;
+    });
+  }
+
+  function resetAll() {
+    if (confirm('确认重置所有测试结果？')) {
+      document.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+      document.getElementById('resultBar').style.display = 'none';
+      updateAllStats();
+    }
+  }
+
+  function calcResult() {
+    const all = document.querySelectorAll('input[type="checkbox"]');
+    const checked = document.querySelectorAll('input[type="checkbox"]:checked');
+    const total = all.length;
+    const passed = checked.length;
+    const rate = total > 0 ? (passed / total * 100).toFixed(1) : 0;
+
+    const bar = document.getElementById('resultBar');
+    const rateEl = document.getElementById('passRate');
+    const detailEl = document.getElementById('resultDetail');
+    const issueEl = document.getElementById('issueList');
+
+    bar.style.display = 'block';
+    rateEl.textContent = `通过率：${passed}/${total}（${rate}%）`;
+    rateEl.className = 'pass-rate ' + (rate >= 90 ? 'good' : rate >= 70 ? 'warn' : 'bad');
+
+    detailEl.innerHTML = `<p style="margin-top:8px;font-size:14px;color:#666;">已通过 ${passed} 项，未通过 ${total - passed} 项</p>`;
+
+    // 列出未通过的测试项
+    const unchecked = [];
+    document.querySelectorAll('input[type="checkbox"]:not(:checked)').forEach(cb => {
+      const label = cb.nextElementSibling;
+      const text = label.childNodes[0].textContent.trim();
+      unchecked.push(text);
+    });
+
+    if (unchecked.length > 0) {
+      issueEl.innerHTML = '<p style="margin-top:8px;font-weight:600;color:#ff4d4f;">未通过项目：</p>' +
+        unchecked.map((t, i) => `<div class="issue-item">${i + 1}. ${t}</div>`).join('');
+    } else {
+      issueEl.innerHTML = '<p style="margin-top:8px;color:#52c41a;font-weight:600;">全部通过！可以确认打包。</p>';
+    }
+
+    bar.scrollIntoView({ behavior: 'smooth' });
+  }
+</script>
+</body>
+</html>

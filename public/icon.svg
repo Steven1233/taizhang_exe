@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect width="256" height="256" rx="40" fill="#CC0000"/>
+  <path d="M128 40 L156 100 L220 108 L170 155 L185 218 L128 190 L71 218 L86 155 L36 108 L100 100 Z" fill="#FFD700" stroke="#E6BE00" stroke-width="4"/>
+  <text x="128" y="140" text-anchor="middle" fill="#CC0000" font-size="48" font-weight="bold" font-family="sans-serif">党</text>
+</svg>
