@@ -5,16 +5,9 @@ import ReactECharts from 'echarts-for-react';
 import { db, normalizeMeetingTypes, normalizeMeetingPartyGroups, normalizeMember } from '../db';
 import { addLog } from '../utils/logHelper';
 import { exportDashboardReport } from '../utils/exportWord';
+import { countActiveAttendance, membersActiveDuring, isActiveAt } from '../utils/memberStatus';
 import type { Meeting, Member, TalkRecord } from '../types';
-import { MEETING_TYPES, sortPartyGroups } from '../types';
-
-/** 单条会议在某类型下的计次单位（V3.2：党小组会=关联党小组数，未关联计1；其他类型=1） */
-function typeMeetingUnits(m: Meeting, type: string): number {
-  if (type === '党小组会') {
-    return m.partyGroups && m.partyGroups.length > 0 ? m.partyGroups.length : 1;
-  }
-  return 1;
-}
+import { MEETING_TYPES, typeMeetingUnits, meetingTotalUnits } from '../types';
 
 export default function Dashboard() {
   const [year, setYear] = useState(new Date().getFullYear());
@@ -44,18 +37,20 @@ export default function Dashboard() {
   const yearMeetings = meetings.filter((m) => m.date.startsWith(String(year)));
   const activeMembers = members.filter((m) => m.status === 'active');
 
-  // 关键指标
-  const totalMeetings = yearMeetings.length;
+  // 关键指标（V3.3：会议总数按套会拆开计入 = 各类型计次单位之和）
+  const totalMeetings = yearMeetings.reduce((s, m) => s + meetingTotalUnits(m), 0);
   const currentMonth = String(new Date().getMonth() + 1).padStart(2, '0');
-  const monthMeetings = yearMeetings.filter((m) => m.date.substring(5, 7) === currentMonth).length;
+  const monthMeetings = yearMeetings
+    .filter((m) => m.date.substring(5, 7) === currentMonth)
+    .reduce((s, m) => s + meetingTotalUnits(m), 0);
 
+  // 平均出勤率（V3.3：时间线在职口径——按会议日期时点判定在职，离开期间不计入）
   let totalAttendance = 0;
   let totalParticipants = 0;
   yearMeetings.forEach((m) => {
-    m.participants.forEach((p) => {
-      totalParticipants++;
-      if (p.status === 'attended') totalAttendance++;
-    });
+    const { shouldAttend, attended } = countActiveAttendance(m, members);
+    totalParticipants += shouldAttend;
+    totalAttendance += attended;
   });
   const avgRate = totalParticipants > 0 ? (totalAttendance / totalParticipants) * 100 : 0;
 
@@ -97,13 +92,15 @@ export default function Dashboard() {
   }));
 
   // 出勤率排行 - 降序排列，并构建详细统计
-  const memberStats = activeMembers
+  // V3.3：时间线在职口径——行范围为"年内任一会议日期时点在职"的人员，每场会议按该场日期单独判定计入
+  const memberStats = membersActiveDuring(members, yearMeetings)
     .map((member) => {
       let total = 0;
       let attended = 0;
       let leave = 0;
       let absent = 0;
       yearMeetings.forEach((m) => {
+        if (!isActiveAt(member, m.date)) return; // 离开期间不计入，离开前/回归后照常计入
         const p = m.participants.find((pt) => pt.memberId === member.id);
         if (p) {
           total++;
@@ -123,9 +120,9 @@ export default function Dashboard() {
     })
     .sort((a, b) => b.rate - a.rate);
 
-  // 部门出勤率 - 排除支委会会议
+  // 部门出勤率 - 排除支委会会议（V3.3：时间线在职口径，行范围与逐场判定同步）
   const deptRates: Record<string, { total: number; attended: number }> = {};
-  activeMembers.forEach((member) => {
+  membersActiveDuring(members, yearMeetings).forEach((member) => {
     const dept = Array.isArray(member.department)
       ? member.department.filter(Boolean).join('、')
       : (member.department || '').trim();
@@ -136,6 +133,7 @@ export default function Dashboard() {
     yearMeetings.forEach((m) => {
       // 支委会不计入部门出勤
       if (m.type.includes('支部委员会')) return;
+      if (!isActiveAt(member, m.date)) return; // 离开期间不计入
       const p = m.participants.find((pt) => pt.memberId === member.id);
       if (p) {
         deptRates[dept].total++;
@@ -147,42 +145,6 @@ export default function Dashboard() {
     name: dept,
     rate: data.total > 0 ? (data.attended / data.total) * 100 : 0,
   }));
-
-  // 党小组会议统计（V3.2 新增：党小组会次数分组展开 + 各组出勤率组内计算）
-  const allPartyGroups = new Set<string>();
-  members.forEach((m) => {
-    const g = (m.partyGroup || '').trim();
-    if (g) allPartyGroups.add(g);
-  });
-  yearMeetings.forEach((m) => {
-    (m.partyGroups || []).forEach((g) => {
-      const t = (g || '').trim();
-      if (t) allPartyGroups.add(t);
-    });
-  });
-  const groupMeetingRecords = yearMeetings.filter((m) => m.type.includes('党小组会'));
-  const partyGroupStats = sortPartyGroups([...allPartyGroups]).map((g) => {
-    const relevant = groupMeetingRecords.filter((m) => (m.partyGroups || []).includes(g));
-    let shouldAttend = 0;
-    let attended = 0;
-    relevant.forEach((m) => {
-      m.participants.forEach((p) => {
-        const mem = members.find((mm) => mm.id === p.memberId);
-        if (mem && (mem.partyGroup || '').trim() === g) {
-          shouldAttend++;
-          if (p.status === 'attended') attended++;
-        }
-      });
-    });
-    return {
-      group: g,
-      count: relevant.length,
-      shouldAttend,
-      attended,
-      rate: shouldAttend > 0 ? (attended / shouldAttend) * 100 : 0,
-    };
-  });
-  const hasGroupMeetingData = partyGroupStats.some((s) => s.count > 0);
 
   // 月度谈心谈话趋势（V3.0 新增）
   const yearTalks = talks.filter((t) => t.talkDate.startsWith(String(year)));
@@ -253,25 +215,20 @@ export default function Dashboard() {
       const key = String(i + 1).padStart(2, '0');
       return {
         month: `${i + 1}月`,
-        count: yearMeetings.filter((m) => m.date.substring(5, 7) === key).length,
+        count: yearMeetings
+          .filter((m) => m.date.substring(5, 7) === key)
+          .reduce((s, m) => s + meetingTotalUnits(m), 0),
       };
     });
     const rankingData = memberStats.map((m) => ({ name: m.name, rate: parseFloat(m.rate.toFixed(1)) }));
-    const groupStats = partyGroupStats.map((s) => ({
-      name: s.group,
-      count: s.count,
-      shouldAttend: s.shouldAttend,
-      attended: s.attended,
-      rate: parseFloat(s.rate.toFixed(1)),
-    }));
-    return { stats, typeStats, monthStats, rankingData, groupStats };
+    return { stats, typeStats, monthStats, rankingData };
   };
 
   const handleExportWord = async () => {
     setExporting(true);
     try {
-      const { stats, typeStats, monthStats, rankingData, groupStats } = getExportData();
-      await exportDashboardReport(year, stats, typeStats, monthStats, rankingData, groupStats, meetings, members);
+      const { stats, typeStats, monthStats, rankingData } = getExportData();
+      await exportDashboardReport(year, stats, typeStats, monthStats, rankingData, meetings, members);
       await addLog('EXPORT_DASHBOARD', `导出${year}年度看板报告`);
       message.success('导出成功');
     } catch (err) {
@@ -403,55 +360,6 @@ export default function Dashboard() {
         }
       : null;
 
-  // 党小组会议统计图 option（V3.2 新增：柱状次数 + 折线出勤率，双Y轴）
-  const groupStatsOption = {
-    tooltip: {
-      trigger: 'axis' as const,
-      axisPointer: { type: 'shadow' as const },
-      formatter: (params: any) => {
-        const idx = params?.[0]?.dataIndex;
-        const s = partyGroupStats[idx];
-        if (!s) return '';
-        return `
-          <strong>${s.group}</strong><br/>
-          党小组会：${s.count} 次<br/>
-          应到：${s.shouldAttend} 人次<br/>
-          实到：${s.attended} 人次<br/>
-          出勤率：${s.rate.toFixed(1)}%
-        `;
-      },
-    },
-    legend: { orient: 'horizontal' as const, bottom: 0 },
-    grid: { left: '3%', right: '4%', bottom: '12%', top: '14%', containLabel: true },
-    xAxis: {
-      type: 'category' as const,
-      data: partyGroupStats.map((s) => s.group),
-    },
-    yAxis: [
-      { type: 'value' as const, name: '次数', minInterval: 1 },
-      { type: 'value' as const, name: '出勤率', max: 100, axisLabel: { formatter: '{value}%' } },
-    ],
-    series: [
-      {
-        name: '党小组会次数',
-        type: 'bar' as const,
-        barMaxWidth: 40,
-        itemStyle: { color: '#CC0000' },
-        label: { show: true, position: 'top' as const },
-        data: partyGroupStats.map((s) => s.count),
-      },
-      {
-        name: '出勤率',
-        type: 'line' as const,
-        yAxisIndex: 1,
-        smooth: true,
-        itemStyle: { color: '#1890ff' },
-        lineStyle: { width: 2, color: '#1890ff' },
-        data: partyGroupStats.map((s) => parseFloat(s.rate.toFixed(1))),
-      },
-    ],
-  };
-
   // 月度谈心谈话趋势图 option（V3.0 新增）
   const talkTrendOption = {
     tooltip: {
@@ -516,7 +424,22 @@ export default function Dashboard() {
         <Col span={6}>
           <Card className="stat-card">
             <div className="stat-value">{avgRate.toFixed(1)}%</div>
-            <div className="stat-label">平均出勤率</div>
+            <div className="stat-label">
+              平均出勤率
+              <Tooltip
+                title={
+                  <div>
+                    <div>计算方法：</div>
+                    <div>平均出勤率 = 全年所有会议的在职出席人次 / 全年所有会议的在职应到人次 × 100%</div>
+                    <div style={{ marginTop: 4 }}>· 按会议日期时点判定在职：调离/借调/离职期间不计入，离开前及回归后照常计入</div>
+                    <div>· 列席人员计入出席</div>
+                    <div>· 临时人员（未录入人员库）不计入</div>
+                  </div>
+                }
+              >
+                <QuestionCircleOutlined style={{ marginLeft: 6, color: '#999', cursor: 'help' }} />
+              </Tooltip>
+            </div>
           </Card>
         </Col>
         <Col span={6}>
@@ -604,18 +527,6 @@ export default function Dashboard() {
               <ReactECharts option={talkTrendOption} style={{ height: 320 }} />
             ) : (
               <Empty description="暂无谈心谈话数据" />
-            )}
-          </Card>
-        </Col>
-      </Row>
-      {/* 党小组会议统计（V3.2 新增：嵌套党小组会按党小组数展开，各组出勤率组内计算） */}
-      <Row gutter={16} style={{ marginTop: 16 }}>
-        <Col span={24}>
-          <Card title={`党小组会议统计（${year}年）`}>
-            {hasGroupMeetingData ? (
-              <ReactECharts option={groupStatsOption} style={{ height: 320 }} />
-            ) : (
-              <Empty description="暂无党小组会数据" />
             )}
           </Card>
         </Col>

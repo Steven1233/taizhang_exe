@@ -4,11 +4,12 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined, DownloadOutlin
 import dayjs from 'dayjs';
 import 'dayjs/locale/zh-cn';
 import { v4 as uuidv4 } from 'uuid';
-import type { Meeting, Participant, AttendanceStatus } from '../types';
+import type { Meeting, Member, Participant, AttendanceStatus } from '../types';
 import { MEETING_TYPES } from '../types';
-import { db, normalizeMeetingTypes, normalizeMeetingPartyGroups } from '../db';
+import { db, normalizeMeetingTypes, normalizeMeetingPartyGroups, normalizeMember } from '../db';
 import { addLog } from '../utils/logHelper';
 import { exportAnnualLedger } from '../utils/exportExcel';
+import { countActiveAttendance } from '../utils/memberStatus';
 import MeetingForm from '../components/MeetingForm';
 import type { MeetingFormValues } from '../components/MeetingForm';
 
@@ -28,6 +29,7 @@ function getCustomMeetingTypes(): string[] {
 
 export default function Meetings() {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [filterType, setFilterType] = useState<string[]>([]);
@@ -48,6 +50,7 @@ export default function Meetings() {
     const data = await db.meetings.toArray();
     data.sort((a, b) => b.date.localeCompare(a.date));
     setMeetings(data.map((m) => normalizeMeetingPartyGroups(normalizeMeetingTypes(m))));
+    setMembers((await db.members.toArray()).map(normalizeMember));
     setTypeVersion((v) => v + 1);
     setLoading(false);
   }, []);
@@ -254,9 +257,9 @@ export default function Meetings() {
       key: 'attendance',
       width: 100,
       render: (_: unknown, record: Meeting) => {
-        const attended = record.participants.filter((p) => p.status === 'attended').length;
-        const total = record.participants.length;
-        return <span>{attended}/{total}</span>;
+        // V3.3：时间线在职口径（按会议日期时点判定在职，离开期间不计入）
+        const { shouldAttend, attended } = countActiveAttendance(record, members);
+        return <span>{attended}/{shouldAttend}</span>;
       },
     },
     {

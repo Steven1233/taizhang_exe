@@ -13,6 +13,7 @@ import {
   ShadingType,
 } from 'docx';
 import type { Meeting, Member } from '../types';
+import { countActiveAttendance } from './memberStatus';
 
 // 主题色
 const THEME_RED = 'CC0000';
@@ -115,7 +116,6 @@ export async function exportDashboardReport(
   typeStats: { name: string; value: number }[],
   monthStats: { month: string; count: number }[],
   rankingData: { name: string; rate: number }[],
-  groupStats: { name: string; count: number; shouldAttend: number; attended: number; rate: number }[],
   meetings: Meeting[],
   members: Member[]
 ): Promise<void> {
@@ -202,65 +202,7 @@ export async function exportDashboardReport(
     columnWidths: [3000, 1500, 1500],
   });
 
-  // 类型统计脚注（V3.2：说明党小组会展开口径）
-  const typeNote = new Paragraph({
-    spacing: { before: 80, after: 120 },
-    children: [
-      new TextRun({
-        text: '注：党小组会次数按参与党小组数统计（如党员大会嵌套3个党小组会，党小组会计3次）；各类型次数之和可能大于会议记录总数。',
-        size: 18,
-        color: '999999',
-        font: '微软雅黑',
-      }),
-    ],
-  });
-
-  // === 三、党小组会议统计（V3.2 新增：各党小组次数 + 组内出勤率） ===
-  const groupHeaders = ['党小组', '党小组会次数', '应到人次', '实到人次', '出勤率'];
-  const groupRows: TableRow[] = [
-    new TableRow({
-      children: groupHeaders.map((h) =>
-        createCell(h, { bold: true, color: 'FFFFFF', bg: HEADER_BG, fontSize: 20 })
-      ),
-    }),
-  ];
-  if (groupStats.length === 0) {
-    groupRows.push(
-      new TableRow({
-        children: [createCell('本年度暂无党小组会记录', { fontSize: 20, colSpan: 5 })],
-      })
-    );
-  } else {
-    groupStats.forEach((g, i) => {
-      const bg = i % 2 === 0 ? 'FFFBFA' : undefined;
-      groupRows.push(
-        new TableRow({
-          children: [
-            createCell(g.name, { fontSize: 20, bg }),
-            createCell(`${g.count} 次`, { fontSize: 20, bg }),
-            createCell(String(g.shouldAttend), { fontSize: 20, bg }),
-            createCell(String(g.attended), { fontSize: 20, bg }),
-            createCell(
-              g.shouldAttend > 0 ? `${g.rate}%` : '-',
-              {
-                fontSize: 20,
-                bg,
-                bold: true,
-                color: g.rate >= 90 ? '00A854' : g.rate >= 70 ? 'FA8C16' : 'F5222D',
-              }
-            ),
-          ],
-        })
-      );
-    });
-  }
-  const groupTable = new Table({
-    width: { size: 80, type: WidthType.PERCENTAGE },
-    rows: groupRows,
-    borders: borderStyle,
-  });
-
-  // === 四、月度会议统计 ===
+  // === 三、月度会议统计 ===
   const monthRows: TableRow[] = [
     new TableRow({
       children: [
@@ -342,8 +284,9 @@ export async function exportDashboardReport(
   const meetingRows: TableRow[] = [meetingHeader];
   const sortedMeetings = [...yearMeetings].sort((a, b) => b.date.localeCompare(a.date));
   sortedMeetings.forEach((m, i) => {
-    const attended = m.participants.filter((p) => p.status === 'attended').length;
-    const rate = m.participants.length > 0 ? ((attended / m.participants.length) * 100).toFixed(0) : '0';
+    // V3.3：时间线在职口径（按会议日期时点判定在职，离开期间不计入）
+    const { shouldAttend, attended } = countActiveAttendance(m, members);
+    const rate = shouldAttend > 0 ? ((attended / shouldAttend) * 100).toFixed(0) : '0';
     const bg = i % 2 === 0 ? 'FFFBFA' : undefined;
     meetingRows.push(
       new TableRow({
@@ -391,23 +334,18 @@ export async function exportDashboardReport(
 
           heading('二、会议类型分布', HeadingLevel.HEADING_2),
           typeTable,
-          typeNote,
           bodyParagraph(''),
 
-          heading('三、党小组会议统计', HeadingLevel.HEADING_2),
-          groupTable,
-          bodyParagraph(''),
-
-          heading('四、月度会议统计', HeadingLevel.HEADING_2),
+          heading('三、月度会议统计', HeadingLevel.HEADING_2),
           monthTable,
           bodyParagraph(''),
 
-          heading('五、出勤率排行榜', HeadingLevel.HEADING_2),
+          heading('四、出勤率排行榜', HeadingLevel.HEADING_2),
           rankTable,
           bodyParagraph(''),
 
-          heading('六、会议记录明细', HeadingLevel.HEADING_2),
-          bodyParagraph(`${year}年度共召开会议 ${yearMeetings.length} 次：`, { bold: false }),
+          heading('五、会议记录明细', HeadingLevel.HEADING_2),
+          bodyParagraph(`${year}年度共召开会议 ${stats.totalMeetings} 次：`, { bold: false }),
           meetingTable,
           bodyParagraph(''),
           new Paragraph({

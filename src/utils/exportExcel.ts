@@ -1,7 +1,8 @@
 import * as XLSX from 'xlsx-js-style';
 import dayjs from 'dayjs';
 import type { Meeting, Member } from '../types';
-import { sortPartyGroups } from '../types';
+import { sortPartyGroups, typeMeetingUnits, meetingTotalUnits } from '../types';
+import { countActiveAttendance, membersActiveDuring, isActiveAt } from './memberStatus';
 
 // ==================== 样式辅助 ====================
 
@@ -120,24 +121,30 @@ const DETAIL_HEADERS = [
 ];
 const DETAIL_COL_WIDTHS = [6, 24, 12, 14, 18, 14, 22, 10, 10, 30, 30, 8, 8, 8, 8, 8, 50];
 
-/** 构建一行会议数据 */
-function buildMeetingRow(m: Meeting, seq: number): (string | number)[] {
-  const attended = m.participants.filter((p) => p.status === 'attended');
-  const leave = m.participants.filter((p) => p.status === 'leave');
-  const absent = m.participants.filter((p) => p.status === 'absent');
-  const total = m.participants.length;
-  const rate = total > 0 ? ((attended.length / total) * 100).toFixed(1) + '%' : '-';
+/** 构建一行会议数据（V3.3：出勤统计按时间线在职口径；名单按"参会/请假/缺席"分栏换行） */
+function buildMeetingRow(m: Meeting, seq: number, members: Member[]): (string | number)[] {
+  // V3.3：按会议日期时点判定在职，离开期间不计入考勤统计；临时人员不计入
+  const { shouldAttend, attended, leave, absent } = countActiveAttendance(m, members);
+  const rate = shouldAttend > 0 ? ((attended / shouldAttend) * 100).toFixed(1) + '%' : '-';
 
-  const attendeeList = m.participants
-    .map((p) => {
-      let name = p.name;
-      if (p.status === 'leave') name += '(请假)';
-      else if (p.status === 'absent') name += '(缺席)';
-      else if (p.isGuest) name += '(列席)';
-      if (p.leaveReason) name += `[${p.leaveReason}]`;
-      return name;
-    })
-    .join('、');
+  // V3.3：参会人员名单按状态分栏换行（参会 = 出席 + 列席）
+  const attendedNames: string[] = [];
+  const leaveNames: string[] = [];
+  const absentNames: string[] = [];
+  m.participants.forEach((p) => {
+    if (p.status === 'leave') {
+      leaveNames.push(p.leaveReason ? `${p.name}(${p.leaveReason})` : p.name);
+    } else if (p.status === 'absent') {
+      absentNames.push(p.name);
+    } else {
+      attendedNames.push(p.isGuest ? `${p.name}(列席)` : p.name);
+    }
+  });
+  const listParts: string[] = [];
+  if (attendedNames.length > 0) listParts.push(`参会：${attendedNames.join('、')}`);
+  if (leaveNames.length > 0) listParts.push(`请假：${leaveNames.join('、')}`);
+  if (absentNames.length > 0) listParts.push(`缺席：${absentNames.join('、')}`);
+  const attendeeList = listParts.join('\n');
 
   const partyGroups = m.partyGroups && m.partyGroups.length > 0 ? m.partyGroups.join('、') : '';
 
@@ -153,38 +160,51 @@ function buildMeetingRow(m: Meeting, seq: number): (string | number)[] {
     m.recorder || '-',
     m.topic,
     m.resolution || '',
-    total,
-    attended.length,
-    leave.length,
-    absent.length,
+    shouldAttend,
+    attended,
+    leave,
+    absent,
     rate,
     attendeeList,
   ];
 }
 
-/** 生成会议明细 Sheet（主表与子表结构一致） */
+/** 生成会议明细 Sheet（主表与子表结构一致；V3.3：支持表头字段标题覆盖） */
 function buildDetailSheet(
   meetings: Meeting[],
   subtitlePrefix: string,
-  subtitlePeriod: string
+  subtitlePeriod: string,
+  members: Member[],
+  headerOverrides?: Record<string, string>
 ): XLSX.WorkSheet | null {
   if (meetings.length === 0) return null;
+
+  const headers = headerOverrides
+    ? DETAIL_HEADERS.map((h) => headerOverrides[h] || h)
+    : DETAIL_HEADERS;
 
   const sheetData: (string | number)[][] = [
     [''],  // 大标题
     [''],  // 副标题
-    DETAIL_HEADERS,
+    headers,
   ];
 
   meetings.forEach((m, i) => {
-    sheetData.push(buildMeetingRow(m, i + 1));
+    sheetData.push(buildMeetingRow(m, i + 1, members));
   });
 
-  // 合计行
-  const totalAll = meetings.reduce((s, m) => s + m.participants.length, 0);
-  const totalAttended = meetings.reduce((s, m) => s + m.participants.filter((p) => p.status === 'attended').length, 0);
-  const totalLeave = meetings.reduce((s, m) => s + m.participants.filter((p) => p.status === 'leave').length, 0);
-  const totalAbsent = meetings.reduce((s, m) => s + m.participants.filter((p) => p.status === 'absent').length, 0);
+  // 合计行（V3.3：时间线在职口径）
+  let totalAll = 0;
+  let totalAttended = 0;
+  let totalLeave = 0;
+  let totalAbsent = 0;
+  meetings.forEach((m) => {
+    const { shouldAttend, attended, leave, absent } = countActiveAttendance(m, members);
+    totalAll += shouldAttend;
+    totalAttended += attended;
+    totalLeave += leave;
+    totalAbsent += absent;
+  });
   const avgRate = totalAll > 0 ? ((totalAttended / totalAll) * 100).toFixed(1) + '%' : '-';
   sheetData.push([
     '合计', '', '', '', '', '', '', '', '', '', '',
@@ -193,11 +213,11 @@ function buildDetailSheet(
 
   const ws = XLSX.utils.aoa_to_sheet(sheetData);
   setColWidths(ws, DETAIL_COL_WIDTHS);
-  applyTitleStyle(ws, 0, DETAIL_HEADERS.length, '党建工作台账');
-  applySubtitleStyle(ws, 1, DETAIL_HEADERS.length, `（${subtitlePrefix} — ${subtitlePeriod}）`);
-  applyHeaderStyle(ws, 2, DETAIL_HEADERS.length);
-  applyDataStyles(ws, 3, sheetData.length - 2, DETAIL_HEADERS.length);
-  applyTotalRowStyle(ws, sheetData.length - 1, DETAIL_HEADERS.length);
+  applyTitleStyle(ws, 0, headers.length, '党建工作台账');
+  applySubtitleStyle(ws, 1, headers.length, `（${subtitlePrefix} — ${subtitlePeriod}）`);
+  applyHeaderStyle(ws, 2, headers.length);
+  applyDataStyles(ws, 3, sheetData.length - 2, headers.length);
+  applyTotalRowStyle(ws, sheetData.length - 1, headers.length);
   setRowHeights(ws, [
     { hpt: 40 },
     { hpt: 24 },
@@ -228,7 +248,7 @@ export async function exportAnnualLedger(
     .sort((a, b) => a.date.localeCompare(b.date));
 
   // ============ Sheet 1: 会议记录明细 ============
-  const wsMain = buildDetailSheet(yearMeetings, '会议记录明细', subtitlePeriod);
+  const wsMain = buildDetailSheet(yearMeetings, '会议记录明细', subtitlePeriod, members);
   if (wsMain) {
     XLSX.utils.book_append_sheet(wb, wsMain, '会议记录明细');
   }
@@ -237,12 +257,12 @@ export async function exportAnnualLedger(
 
   // 支委会
   const committeeMeetings = yearMeetings.filter((m) => m.type.includes('支部委员会'));
-  const wsCommittee = buildDetailSheet(committeeMeetings, '支委会', subtitlePeriod);
+  const wsCommittee = buildDetailSheet(committeeMeetings, '支委会', subtitlePeriod, members);
   if (wsCommittee) XLSX.utils.book_append_sheet(wb, wsCommittee, '支委会');
 
   // 党员大会
   const memberMeetingMeetings = yearMeetings.filter((m) => m.type.includes('支部党员大会'));
-  const wsMemberMeeting = buildDetailSheet(memberMeetingMeetings, '党员大会', subtitlePeriod);
+  const wsMemberMeeting = buildDetailSheet(memberMeetingMeetings, '党员大会', subtitlePeriod, members);
   if (wsMemberMeeting) XLSX.utils.book_append_sheet(wb, wsMemberMeeting, '党员大会');
 
   // 各党小组会（动态生成所有有数据的党小组子表）
@@ -257,19 +277,31 @@ export async function exportAnnualLedger(
     const groupMeetings = groupMeetingMeetings.filter(
       (m) => (m.partyGroups || []).includes(group)
     );
-    const wsGroup = buildDetailSheet(groupMeetings, `${group}会`, subtitlePeriod);
+    const wsGroup = buildDetailSheet(groupMeetings, `${group}会`, subtitlePeriod, members);
     if (wsGroup) XLSX.utils.book_append_sheet(wb, wsGroup, `${group}会`);
   });
 
+  // 党课（V3.3 新增子表）
+  const partyLectureMeetings = yearMeetings.filter((m) => m.type.includes('党课'));
+  const wsPartyLecture = buildDetailSheet(partyLectureMeetings, '党课', subtitlePeriod, members);
+  if (wsPartyLecture) XLSX.utils.book_append_sheet(wb, wsPartyLecture, '党课');
+
   // 组织生活会
   const organizationalMeetings = yearMeetings.filter((m) => m.type.includes('组织生活会'));
-  const wsOrganizational = buildDetailSheet(organizationalMeetings, '组织生活会', subtitlePeriod);
+  const wsOrganizational = buildDetailSheet(organizationalMeetings, '组织生活会', subtitlePeriod, members);
   if (wsOrganizational) XLSX.utils.book_append_sheet(wb, wsOrganizational, '组织生活会');
 
   // 民主生活会
   const democraticMeetings = yearMeetings.filter((m) => m.type.includes('民主生活会'));
-  const wsDemocratic = buildDetailSheet(democraticMeetings, '民主生活会', subtitlePeriod);
+  const wsDemocratic = buildDetailSheet(democraticMeetings, '民主生活会', subtitlePeriod, members);
   if (wsDemocratic) XLSX.utils.book_append_sheet(wb, wsDemocratic, '民主生活会');
+
+  // 主题党日活动（V3.3 新增子表："会议议题"列改为"活动内容"）
+  const partyDayMeetings = yearMeetings.filter((m) => m.type.includes('主题党日活动'));
+  const wsPartyDay = buildDetailSheet(partyDayMeetings, '主题党日活动', subtitlePeriod, members, {
+    '会议议题': '活动内容',
+  });
+  if (wsPartyDay) XLSX.utils.book_append_sheet(wb, wsPartyDay, '主题党日活动');
 
   // ============ 参会考勤统计 ============
   const headers2 = ['序号', '姓名', '部室', '部门/支部', '应参加次数', '实际出席次数', '请假次数', '缺席次数', '出勤率'];
@@ -279,13 +311,16 @@ export async function exportAnnualLedger(
     headers2,
   ];
 
-  const activeMembers = members.filter((m) => m.status === 'active');
-  const memberStats = activeMembers.map((member) => {
+  // V3.3：时间线在职口径——行范围为"统计期内任一会议日期时点在职"的人员
+  // （含期内已调离、借调中、借调回归者，保证历史台账出勤数据完整）
+  const scopedMembers = membersActiveDuring(members, yearMeetings);
+  const memberStats = scopedMembers.map((member) => {
     let shouldAttend = 0;
     let attended = 0;
     let leave = 0;
     let absent = 0;
     yearMeetings.forEach((meeting) => {
+      if (!isActiveAt(member, meeting.date)) return; // 离开期间不计入，离开前/回归后照常计入
       const p = meeting.participants.find((pp) => pp.memberId === member.id);
       if (p) {
         shouldAttend++;
@@ -339,12 +374,19 @@ export async function exportAnnualLedger(
   while (cursor.isBefore(endMonth) || cursor.isSame(endMonth, 'month')) {
     const monthKey = cursor.format('YYYY-MM');
     const monthMeetings = yearMeetings.filter((mm) => mm.date.startsWith(monthKey));
-    const mAttended = monthMeetings.reduce((s, mm) => s + mm.participants.filter((p) => p.status === 'attended').length, 0);
-    const mTotal = monthMeetings.reduce((s, mm) => s + mm.participants.length, 0);
+    // V3.3：会议次数按套会拆开计次（= 各类型计次单位之和）；出勤按时间线在职口径
+    const mCount = monthMeetings.reduce((s, mm) => s + meetingTotalUnits(mm), 0);
+    let mAttended = 0;
+    let mTotal = 0;
+    monthMeetings.forEach((mm) => {
+      const { shouldAttend, attended } = countActiveAttendance(mm, members);
+      mTotal += shouldAttend;
+      mAttended += attended;
+    });
     const mRate = mTotal > 0 ? ((mAttended / mTotal) * 100).toFixed(1) + '%' : '-';
     const rowLabel = isCrossYear ? cursor.format('YYYY年M月') : `${cursor.month() + 1}月`;
-    sheet3Data.push([rowLabel, monthMeetings.length, mTotal, mAttended, mRate]);
-    sumMeetings += monthMeetings.length;
+    sheet3Data.push([rowLabel, mCount, mTotal, mAttended, mRate]);
+    sumMeetings += mCount;
     sumShould += mTotal;
     sumAttended += mAttended;
     cursor = cursor.add(1, 'month');
@@ -376,9 +418,10 @@ export async function exportAnnualLedger(
     headers4,
   ];
   const typeCount: Record<string, number> = {};
+  // V3.3：按套会拆开计次（党小组会按关联党小组数展开），合计 = 看板会议总数
   yearMeetings.forEach((m) => {
     const types = Array.isArray(m.type) ? m.type : [String(m.type)];
-    types.forEach((t) => { typeCount[t] = (typeCount[t] || 0) + 1; });
+    types.forEach((t) => { typeCount[t] = (typeCount[t] || 0) + typeMeetingUnits(m, t); });
   });
   const typeTotal = Object.values(typeCount).reduce((s, v) => s + v, 0);
   Object.entries(typeCount)
