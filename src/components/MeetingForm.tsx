@@ -244,6 +244,8 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
   const [meetingDate, setMeetingDate] = useState<dayjs.Dayjs | null>(null);
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
   const [selectedPartyGroups, setSelectedPartyGroups] = useState<string[]>([]);
+  // V3.3：参会人员表格的党小组筛选
+  const [groupFilter, setGroupFilter] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     db.members.toArray().then(setMembers);
@@ -283,6 +285,7 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
         setSelectedPartyGroups([]);
       }
       setSearchText('');
+      setGroupFilter(undefined);
     }
   }, [open, editingMeeting, form]);
 
@@ -310,6 +313,26 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
     return members.filter((m) => isActiveAt(m, dateStr));
   }, [members, meetingDate]);
 
+  // 未添加的在职人员（V3.3：按会议类型限定提示范围，供核实后录入）
+  // 党小组会（已选党小组）→ 仅所选党小组的在职成员；其他情况 → 全部在职成员
+  const unselectedMembers = useMemo(() => {
+    let pool = candidateMembers;
+    if (isPartyGroupMeeting && selectedPartyGroups.length > 0) {
+      pool = pool.filter((m) => m.partyGroup && selectedPartyGroups.includes(m.partyGroup));
+    }
+    return pool.filter((m) => !participants.find((p) => p.memberId === m.id));
+  }, [candidateMembers, participants, isPartyGroupMeeting, selectedPartyGroups]);
+
+  // 党小组筛选后的参会人员表格数据（V3.3）
+  const filteredParticipants = useMemo(() => {
+    if (!groupFilter) return participants;
+    return participants.filter((p) => {
+      if (p.isTemporary) return false; // 临时人员无党小组
+      const m = members.find((mm) => mm.id === p.memberId);
+      return m?.partyGroup === groupFilter;
+    });
+  }, [participants, groupFilter, members]);
+
   // 搜索过滤的候选列表
   const searchCandidates = useMemo(() => {
     if (!searchText.trim()) return [];
@@ -318,6 +341,20 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
       (m) => m.name.toLowerCase().includes(kw) || (m.title || '').toLowerCase().includes(kw)
     );
   }, [searchText, candidateMembers]);
+
+  /** 实际提交（V3.3：与提交拦截分离） */
+  const doSubmit = (values: MeetingFormValues) => {
+    // 新输入的地点保存为自定义预设
+    persistLocationIfNew(values.location);
+    onOk({ ...values, type: selectedTypes, participants, partyGroups: selectedPartyGroups });
+    form.resetFields();
+    setParticipants([]);
+    setAttendanceText('');
+    setParsedResult(null);
+    setSelectedTypes([]);
+    setSelectedPartyGroups([]);
+    setMeetingDate(null);
+  };
 
   const handleOk = async () => {
     try {
@@ -334,16 +371,19 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
         message.warning('请至少选择一名参会人员');
         return;
       }
-      // 新输入的地点保存为自定义预设
-      persistLocationIfNew(values.location);
-      onOk({ ...values, type: selectedTypes, participants, partyGroups: selectedPartyGroups });
-      form.resetFields();
-      setParticipants([]);
-      setAttendanceText('');
-      setParsedResult(null);
-      setSelectedTypes([]);
-      setSelectedPartyGroups([]);
-      setMeetingDate(null);
+      // V3.3：仍有未添加的在职人员时二次确认（确保核实后录入）
+      if (unselectedMembers.length > 0) {
+        const names = unselectedMembers.map((m) => m.name).join('、');
+        Modal.confirm({
+          title: '仍有在职人员未添加',
+          content: `仍有 ${unselectedMembers.length} 名在职人员未添加到参会名单：${names}。是否确认提交？`,
+          okText: '继续提交',
+          cancelText: '返回核实',
+          onOk: () => doSubmit(values),
+        });
+        return;
+      }
+      doSubmit(values);
     } catch {
       // validation failed
     }
@@ -490,6 +530,18 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
     });
     setParticipants(newParticipants);
     message.success(`已选择 ${groupMembers.length} 名党小组人员`);
+  };
+
+  /** 一键添加全部未选中的在职人员（V3.3：核实遗漏后快捷补录） */
+  const addAllUnselected = () => {
+    const newParticipants: Participant[] = [...participants];
+    unselectedMembers.forEach((m) => {
+      if (!newParticipants.find((p) => p.memberId === m.id)) {
+        newParticipants.push({ memberId: m.id, name: m.name, status: 'attended', isTemporary: false });
+      }
+    });
+    setParticipants(newParticipants);
+    message.success(`已添加 ${unselectedMembers.length} 名在职人员`);
   };
 
   // ==================== 智能解析 ====================
@@ -953,8 +1005,8 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
 
         {/* 参会人员选择（集成式） */}
         <Form.Item label="参会人员" required>
-          {/* 搜索添加区 */}
-          <div style={{ marginBottom: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
+          {/* 搜索添加区（V3.3：新增党小组筛选浏览） */}
+          <div style={{ marginBottom: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <Input
               placeholder="搜索姓名/部室添加人员；输入未匹配姓名后回车添加临时人员"
               prefix={<SearchOutlined />}
@@ -981,12 +1033,21 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
               }}
               allowClear
             />
+            <Select
+              allowClear
+              placeholder="按党小组浏览"
+              style={{ width: 150 }}
+              value={groupFilter}
+              onChange={setGroupFilter}
+              options={partyGroupOptions.map((g) => ({ label: g, value: g }))}
+            />
             <span style={{ color: '#999', fontSize: 12 }}>
               已选 {participants.length} 人（出席{participants.filter((p) => p.status === 'attended' && !p.isGuest).length}人，
               列席{participants.filter((p) => p.status === 'attended' && p.isGuest).length}人，
               请假{participants.filter((p) => p.status === 'leave').length}人，
               缺席{participants.filter((p) => p.status === 'absent').length}人，
               临时{participants.filter((p) => p.isTemporary).length}人）
+              {groupFilter ? `（当前仅显示${groupFilter}）` : ''}
             </span>
           </div>
 
@@ -1037,15 +1098,72 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
             </Button>
           </div>
 
-          {/* 已选人员表格 */}
+          {/* 已选人员表格（V3.3：支持党小组筛选浏览） */}
           <Table
             size="small"
             columns={participantColumns}
-            dataSource={participants}
+            dataSource={filteredParticipants}
             rowKey="memberId"
             pagination={false}
             scroll={{ y: 260 }}
           />
+
+          {/* 未添加的在职人员提示区（V3.3：根据会议类型体现遗漏，核实后录入） */}
+          {unselectedMembers.length > 0 ? (
+            <div
+              style={{
+                marginTop: 8,
+                padding: '8px 12px',
+                border: '1px solid #faad14',
+                background: '#fffbe6',
+                borderRadius: 6,
+              }}
+            >
+              <div style={{ marginBottom: 6, fontSize: 13 }}>
+                <span style={{ color: '#fa8c16', fontWeight: 500 }}>
+                  尚有 {unselectedMembers.length} 名在职人员未添加到参会名单（点击姓名可添加）：
+                </span>
+                <Button
+                  size="small"
+                  type="link"
+                  onClick={addAllUnselected}
+                  style={{ padding: 0, marginLeft: 8 }}
+                >
+                  全部添加
+                </Button>
+              </div>
+              <div>
+                {unselectedMembers.map((m) => (
+                  <Tag
+                    key={m.id}
+                    color="orange"
+                    style={{ cursor: 'pointer', marginBottom: 4 }}
+                    onClick={() => addMember(m)}
+                  >
+                    {m.name}
+                    {m.title ? `（${m.title}）` : ''}
+                    {m.partyGroup ? ` [${m.partyGroup}]` : ''}
+                  </Tag>
+                ))}
+              </div>
+            </div>
+          ) : (
+            candidateMembers.length > 0 && (
+              <div
+                style={{
+                  marginTop: 8,
+                  padding: '6px 12px',
+                  border: '1px solid #b7eb8f',
+                  background: '#f6ffed',
+                  borderRadius: 6,
+                  fontSize: 13,
+                  color: '#52c41a',
+                }}
+              >
+                在职人员已全部覆盖（按会议日期时点判定）
+              </div>
+            )
+          )}
         </Form.Item>
 
         <Form.Item name="resolution" label="会议决议/结论">

@@ -100,6 +100,25 @@ export function sortPartyGroups(groups: string[]): string[] {
   });
 }
 
+/**
+ * 单条会议在某类型下的计次单位（V3.3 套会拆开计次）
+ * 党小组会 = 该记录关联的党小组数（未关联时计 1）；其他类型 = 1
+ */
+export function typeMeetingUnits(m: Meeting, type: string): number {
+  if (type === '党小组会') {
+    return m.partyGroups && m.partyGroups.length > 0 ? m.partyGroups.length : 1;
+  }
+  return 1;
+}
+
+/**
+ * 单条会议的计次总数（套会拆开：各类型计次单位之和）
+ * 例：一条记录类型为 [支部党员大会、党小组会（3 组）、党课、主题党日活动] → 1+3+1+1 = 6 次
+ */
+export function meetingTotalUnits(m: Meeting): number {
+  return m.type.reduce((s, t) => s + typeMeetingUnits(m, t), 0);
+}
+
 // 操作类型
 export type OperationType =
   | 'CREATE_MEMBER'
