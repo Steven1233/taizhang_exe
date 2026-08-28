@@ -1,9 +1,9 @@
-import { Modal, Form, Input, Select, DatePicker, TimePicker, Button, Tag, Space, Table, message, Checkbox, AutoComplete } from 'antd';
+import { Modal, Form, Input, Select, DatePicker, TimePicker, Button, Tag, Space, Table, message, Checkbox, AutoComplete, Alert } from 'antd';
 import { DeleteOutlined, CopyOutlined, ThunderboltOutlined, SearchOutlined } from '@ant-design/icons';
 import { useEffect, useState, useMemo } from 'react';
 import dayjs from 'dayjs';
 import type { Meeting, Member, Participant, AttendanceStatus } from '../types';
-import { MEETING_TYPES, PARTY_GROUPS, PRESET_LOCATIONS, sortPartyGroups } from '../types';
+import { MEETING_TYPES, PARTY_GROUPS, PRESET_LOCATIONS, sortPartyGroups, MEMBER_STATUS_LABEL } from '../types';
 import { db } from '../db';
 import { isActiveAt } from '../utils/memberStatus';
 import { addLog } from '../utils/logHelper';
@@ -36,6 +36,29 @@ interface ParsedParticipant {
   name: string;
   status: AttendanceStatus;
   reason?: string;
+}
+
+// V3.4 功能3：待确认的"非该日期在职"人员（搜索添加与智能解析共用同一警示提示）
+interface InactivePendingItem {
+  member: Member;
+  status: AttendanceStatus;  // 出席状态（智能解析按解析结果，搜索添加默认出席）
+  reason?: string;           // 请假原因
+  isGuest: boolean;          // 列席标记
+}
+
+/**
+ * 获取人员在指定日期时点的状态标签及该状态起始日期（V3.4 功能3）
+ * 判定口径与 isActiveAt 一致：早于首条记录时沿用首条状态
+ */
+function getStatusAt(m: Member, date: string): { label: string; since?: string } {
+  const history = m.statusHistory;
+  if (!history || history.length === 0) {
+    return { label: MEMBER_STATUS_LABEL[m.status] || '在职' };
+  }
+  const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date));
+  const changes = sorted.filter((c) => c.date <= date);
+  const cur = changes.length > 0 ? changes[changes.length - 1] : sorted[0];
+  return { label: MEMBER_STATUS_LABEL[cur.status] || '在职', since: cur.date };
 }
 
 // ==================== 自定义会议类型（localStorage） ====================
@@ -246,6 +269,8 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
   const [selectedPartyGroups, setSelectedPartyGroups] = useState<string[]>([]);
   // V3.3：参会人员表格的党小组筛选
   const [groupFilter, setGroupFilter] = useState<string | undefined>(undefined);
+  // V3.4 功能3：待确认的"非该日期在职"人员（搜索添加与智能解析共用同一警示提示）
+  const [pendingInactive, setPendingInactive] = useState<InactivePendingItem[]>([]);
 
   useEffect(() => {
     db.members.toArray().then(setMembers);
@@ -286,6 +311,7 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
       }
       setSearchText('');
       setGroupFilter(undefined);
+      setPendingInactive([]); // V3.4 功能3：打开/切换弹窗时清空待确认列表
     }
   }, [open, editingMeeting, form]);
 
@@ -307,11 +333,13 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
     return sortPartyGroups([...groups]);
   }, [members]);
 
+  // 会议日期时点字符串（未选日期时按今天，与在职候选判定口径一致）
+  const activeDateStr = meetingDate ? meetingDate.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD');
+
   // 按会议日期时点在职的候选人员
   const candidateMembers = useMemo(() => {
-    const dateStr = meetingDate ? meetingDate.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD');
-    return members.filter((m) => isActiveAt(m, dateStr));
-  }, [members, meetingDate]);
+    return members.filter((m) => isActiveAt(m, activeDateStr));
+  }, [members, activeDateStr]);
 
   // 未添加的在职人员（V3.3：按会议类型限定提示范围，供核实后录入）
   // 党小组会（已选党小组）→ 仅所选党小组的在职成员；其他情况 → 全部在职成员
@@ -341,6 +369,44 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
       (m) => m.name.toLowerCase().includes(kw) || (m.title || '').toLowerCase().includes(kw)
     );
   }, [searchText, candidateMembers]);
+
+  // V3.4 功能3：人员库中存在但非该日期在职的搜索匹配（下拉中标注状态与起始日期，供确认添加）
+  const inactiveSearchCandidates = useMemo(() => {
+    const kw = searchText.trim().toLowerCase();
+    if (!kw) return [];
+    return members.filter(
+      (m) =>
+        !isActiveAt(m, activeDateStr) &&
+        (m.name.toLowerCase().includes(kw) || (m.title || '').toLowerCase().includes(kw))
+    );
+  }, [searchText, members, activeDateStr]);
+
+  /** V3.4 功能3：加入待确认列表（按人员去重），选中后由警示条确认"仍添加为正式成员" */
+  const requestAddInactive = (item: InactivePendingItem) => {
+    setPendingInactive((prev) =>
+      prev.some((p) => p.member.id === item.member.id) ? prev : [...prev, item]
+    );
+  };
+
+  /** V3.4 功能3：确认"仍添加为正式成员" */
+  const confirmAddInactive = () => {
+    if (pendingInactive.length === 0) return;
+    const newParticipants = [...participants];
+    pendingInactive.forEach(({ member, status, reason, isGuest }) => {
+      if (newParticipants.find((p) => p.memberId === member.id)) return;
+      newParticipants.push({
+        memberId: member.id,
+        name: member.name,
+        status,
+        isTemporary: false,
+        leaveReason: reason,
+        isGuest,
+      });
+    });
+    setParticipants(newParticipants);
+    setPendingInactive([]);
+    message.success('已添加为正式成员');
+  };
 
   /** 实际提交（V3.3：与提交拦截分离） */
   const doSubmit = (values: MeetingFormValues) => {
@@ -408,7 +474,16 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
       topic: last.topic,
       resolution: last.resolution || '',
     });
-    setParticipants(last.participants);
+    setParticipants(
+      // V3.4 功能6：复用记录时清除原有快照，保存时按当前部门/部室重新快照
+      last.participants.map((p) => {
+        if (p.departmentSnapshot === undefined && p.titleSnapshot === undefined) return p;
+        const copy = { ...p };
+        delete copy.departmentSnapshot;
+        delete copy.titleSnapshot;
+        return copy;
+      })
+    );
     setSelectedTypes(last.type);
     setSelectedPartyGroups(last.partyGroups || []);
     message.success('已复用上一条会议记录，请修改日期后保存');
@@ -465,6 +540,7 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
   /** 日期变更：已选人员按新日期时点重算在职状态，非在职者保留但提示核实 */
   const handleDateChange = (d: dayjs.Dayjs | null) => {
     setMeetingDate(d);
+    setPendingInactive([]); // V3.4 功能3：日期变更后在职判定口径改变，清空待确认列表
     if (d) {
       const dateStr = d.format('YYYY-MM-DD');
       const notActiveNames = participants
@@ -568,6 +644,8 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
     if (!parsedResult) return;
 
     const newParticipants: Participant[] = [...participants];
+    // V3.4 功能3：人员库匹配但非该日期在职者暂存待确认（与搜索添加走同一警示提示，口径统一）
+    const inactivePending: InactivePendingItem[] = [];
 
     const importPerson = (p: ParsedParticipant, isGuest = false) => {
       const existingMember = matchMember(members, p.name);
@@ -586,16 +664,36 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
             // 出席段+列席段同现：补标记列席
             newParticipants[idx] = { ...newParticipants[idx], isGuest: true };
           }
-        } else {
-          newParticipants.push({
-            memberId: existingMember.id,
-            name: existingMember.name,
-            status: p.status,
-            isTemporary: false,
-            leaveReason: p.reason,
-            isGuest,
-          });
+          return;
         }
+        // V3.4 功能3：非该日期在职 → 不直接导入，走警示条确认（默认不参与该会议考勤统计）
+        if (!isActiveAt(existingMember, activeDateStr)) {
+          const idxP = inactivePending.findIndex((x) => x.member.id === existingMember.id);
+          if (idxP >= 0) {
+            // 出席段与请假段同现：请假优先（与在职人员导入口径一致）
+            if (p.status === 'leave') {
+              inactivePending[idxP] = {
+                ...inactivePending[idxP],
+                status: 'leave',
+                reason: p.reason ?? inactivePending[idxP].reason,
+                isGuest: false,
+              };
+            } else if (isGuest) {
+              inactivePending[idxP] = { ...inactivePending[idxP], isGuest: true };
+            }
+          } else {
+            inactivePending.push({ member: existingMember, status: p.status, reason: p.reason, isGuest });
+          }
+          return;
+        }
+        newParticipants.push({
+          memberId: existingMember.id,
+          name: existingMember.name,
+          status: p.status,
+          isTemporary: false,
+          leaveReason: p.reason,
+          isGuest,
+        });
       } else {
         if (!newParticipants.find((np) => np.name === p.name)) {
           const tempId = `temp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -628,9 +726,14 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
     }
 
     setParticipants(newParticipants);
+    inactivePending.forEach((item) => requestAddInactive(item));
     setParsedResult(null);
     setAttendanceText('');
-    message.success('已导入参会人员');
+    message.success(
+      inactivePending.length > 0
+        ? `已导入参会人员，另有 ${inactivePending.length} 名非该日期在职人员待确认`
+        : '已导入参会人员'
+    );
   };
 
   /** 表单提交时保存新地点为自定义预设（避免输入过程产生中间态） */
@@ -697,6 +800,8 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
       key: 'title',
       width: 110,
       render: (_: unknown, record: Participant) => {
+        // V3.4 功能6：优先读会议时点快照（旧数据无快照回退当前值）
+        if (record.titleSnapshot !== undefined) return record.titleSnapshot || '-';
         const m = members.find((mm) => mm.id === record.memberId);
         return m?.title || '-';
       },
@@ -1027,7 +1132,20 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
                   // 多人命中：不批量添加，提示点选
                   message.info(`匹配到 ${matched.length} 人，请点击候选名单选择`);
                 } else {
-                  addTempPerson(trimmed);
+                  // V3.4 功能3：人员库存在但非该日期在职 → 警示条确认"仍添加为正式成员"，不再静默创建临时人员
+                  const inactiveMatched = members.filter(
+                    (m) =>
+                      !isActiveAt(m, activeDateStr) &&
+                      (m.name.toLowerCase().includes(kw) || (m.title || '').toLowerCase().includes(kw))
+                  );
+                  if (inactiveMatched.length === 1) {
+                    requestAddInactive({ member: inactiveMatched[0], status: 'attended', isGuest: false });
+                  } else if (inactiveMatched.length > 1) {
+                    message.info(`人员库中匹配到 ${inactiveMatched.length} 名非该日期在职人员，请点击候选名单选择`);
+                  } else {
+                    // 人员库确无此人：保留临时人员入口
+                    addTempPerson(trimmed);
+                  }
                 }
                 setSearchText('');
               }}
@@ -1051,8 +1169,49 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
             </span>
           </div>
 
-          {/* 搜索候选列表 */}
-          {searchText.trim() && searchCandidates.length > 0 && (
+          {/* V3.4 功能3：非该日期在职人员警示条（搜索添加与智能解析共用，确认后方可添加为正式成员） */}
+          {pendingInactive.length > 0 && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 8 }}
+              message="以下人员按会议日期时点非在职，需确认后才能添加"
+              description={
+                <div style={{ fontSize: 13 }}>
+                  {pendingInactive.map(({ member, status, reason, isGuest }) => {
+                    const info = getStatusAt(member, activeDateStr);
+                    return (
+                      <div key={member.id} style={{ marginBottom: 2 }}>
+                        <b>{member.name}</b> 在人员库中，{activeDateStr} 时点状态为{info.label}
+                        {info.since ? `（${info.since} 起）` : ''}，非在职，默认不参与该会议考勤统计
+                        {status === 'leave'
+                          ? `（解析为请假${reason ? `：${reason}` : ''}）`
+                          : status === 'absent'
+                            ? '（解析为缺席）'
+                            : isGuest
+                              ? '（解析为列席）'
+                              : ''}
+                        。
+                      </div>
+                    );
+                  })}
+                  <div style={{ marginTop: 8 }}>
+                    <Space>
+                      <Button size="small" type="primary" onClick={confirmAddInactive}>
+                        仍添加为正式成员
+                      </Button>
+                      <Button size="small" onClick={() => setPendingInactive([])}>
+                        取消
+                      </Button>
+                    </Space>
+                  </div>
+                </div>
+              }
+            />
+          )}
+
+          {/* 搜索候选列表（V3.4 功能3：非该日期在职者一并列出，标注状态与起始日期） */}
+          {searchText.trim() && (searchCandidates.length > 0 || inactiveSearchCandidates.length > 0) && (
             <div
               style={{
                 marginBottom: 8,
@@ -1077,6 +1236,28 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
                   {m.committeeRole ? ` [${m.committeeRole}]` : ''}
                 </Tag>
               ))}
+              {inactiveSearchCandidates.map((m) => {
+                const info = getStatusAt(m, activeDateStr);
+                return (
+                  <Tag
+                    key={m.id}
+                    color="orange"
+                    style={{ cursor: 'pointer', marginBottom: 4 }}
+                    onClick={() => {
+                      // V3.4 功能3：选中后走警示条确认，不直接添加、不建临时人员
+                      requestAddInactive({ member: m, status: 'attended', isGuest: false });
+                      setSearchText('');
+                    }}
+                  >
+                    {m.name}
+                    {m.title ? `（${m.title}）` : ''}
+                    <span style={{ fontSize: 12 }}>
+                      ：{info.label}
+                      {info.since ? `（${info.since} 起）` : ''} · 非该日期在职
+                    </span>
+                  </Tag>
+                );
+              })}
             </div>
           )}
 

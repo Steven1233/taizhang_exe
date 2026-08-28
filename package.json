@@ -1,7 +1,7 @@
 {
   "name": "party-building-ledger",
   "private": true,
-  "version": "3.3.0",
+  "version": "3.4.0",
   "description": "党建工作台账应用 - 基层党组织会议记录与统计管理",
   "author": "Party Building",
   "main": "electron/main.cjs",
@@ -22,6 +22,7 @@
     "cross-env": "^10.1.0",
     "electron": "^39.2.7",
     "electron-builder": "^26.0.12",
+    "fake-indexeddb": "^6.2.5",
     "typescript": "~6.0.2",
     "vite": "^8.1.1",
     "wait-on": "^9.0.3"
