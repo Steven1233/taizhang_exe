@@ -84,7 +84,10 @@ function buildImportHistory(
   return [{ status, date: cd }];
 }
 
-/** 功能 2b：编辑保存时自动 diff 信息字段，追加只读留痕（不参与任何统计判定） */
+/** 功能 2b：编辑保存时自动 diff 信息字段，追加只读留痕（不参与任何统计判定）
+ *  baseHistory：弹窗"变更历史"表格整理后的信息变更整包（手动编辑与自动生成的行同等对待），
+ *  缺省时回退库中现有留痕（与原行为一致）
+ */
 function buildChangeHistory(
   oldMember: Member,
   newValues: {
@@ -97,8 +100,10 @@ function buildChangeHistory(
     committeeRole: string;
     status: MemberStatus;
   },
-  date: string
+  date: string,
+  baseHistory?: MemberChangeLog[]
 ): MemberChangeLog[] {
+  const base = baseHistory ?? oldMember.changeHistory;
   const diffs = [
     { field: '姓名', oldValue: oldMember.name, newValue: newValues.name },
     { field: '部室', oldValue: oldMember.title || '', newValue: newValues.title || '' },
@@ -109,8 +114,8 @@ function buildChangeHistory(
     { field: '联系电话', oldValue: oldMember.phone || '', newValue: newValues.phone || '' },
     { field: '状态', oldValue: MEMBER_STATUS_LABEL[oldMember.status], newValue: MEMBER_STATUS_LABEL[newValues.status] },
   ].filter((d) => d.oldValue !== d.newValue);
-  if (diffs.length === 0) return oldMember.changeHistory || [];
-  const logs = oldMember.changeHistory ? [...oldMember.changeHistory] : [];
+  if (diffs.length === 0) return base || [];
+  const logs = base ? [...base] : [];
   diffs.forEach((d) => logs.push({ date, ...d }));
   return logs;
 }
@@ -314,12 +319,13 @@ export default function Members() {
     committeeRole: string;
     statusChangeDate?: Dayjs;
     statusHistory?: MemberStatusChange[];
+    changeHistory?: MemberChangeLog[];  // 弹窗变更历史表格整理后的信息变更整包（手动编辑与自动生成同等对待）
   }) => {
     const now = new Date().toISOString();
     const dept = (values.department || '').trim();
     const changeDate = values.statusChangeDate?.format('YYYY-MM-DD');
-    // 剔除 statusChangeDate 与 statusHistory，仅保留实体字段
-    const { statusChangeDate: _omit, statusHistory: _omitHistory, ...entityValues } = values;
+    // 剔除 statusChangeDate / statusHistory / changeHistory，仅保留实体字段
+    const { statusChangeDate: _omit, statusHistory: _omitHistory, changeHistory: _omitChangeHistory, ...entityValues } = values;
 
     if (editingMember) {
       // 状态历史：以弹窗"变更历史"表格整理后的时间线为基准（V3.4 功能 2a，替代原"仅追加"逻辑）
@@ -335,11 +341,12 @@ export default function Members() {
       const sorted = [...(statusHistory || [])].sort((a, b) => a.date.localeCompare(b.date));
       // 最终状态 = 时间线末条状态；时间线删空时回退表单所选状态兜底
       const finalStatus = sorted.length > 0 ? sorted[sorted.length - 1].status : values.status;
-      // 信息变更自动留痕（V3.4 功能 2b）
+      // 信息变更留痕：以弹窗整理后的整包为基准自动 diff 追加（V3.4 功能 2b，基准可维护、整包替换）
       const changeHistory = buildChangeHistory(
         editingMember,
         { ...entityValues, status: finalStatus, department: dept },
-        now.substring(0, 10)
+        now.substring(0, 10),
+        _omitChangeHistory
       );
       await db.members.update(editingMember.id, {
         ...entityValues,

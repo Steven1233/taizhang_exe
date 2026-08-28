@@ -1,10 +1,10 @@
-import { Modal, Form, Input, Select, Checkbox, AutoComplete, DatePicker, Table, Button, Tag, message } from 'antd';
+import { Modal, Form, Input, Select, Checkbox, AutoComplete, DatePicker, Table, Button, Tag, message, Dropdown } from 'antd';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 import { v4 as uuidv4 } from 'uuid';
-import type { Member, MemberStatus, MemberStatusChange } from '../types';
+import type { Member, MemberStatus, MemberStatusChange, MemberChangeLog } from '../types';
 import { COMMITTEE_ROLES, PARTY_GROUPS, MEMBER_STATUS_LABEL, sortPartyGroups } from '../types';
 import { db, normalizeMember } from '../db';
 
@@ -22,11 +22,12 @@ interface MemberFormProps {
     committeeRole: string;
     statusChangeDate?: Dayjs;  // 状态变更日期（状态变化时有效）
     statusHistory?: MemberStatusChange[];  // 变更历史表格整理后的状态时间线（编辑时有效）
+    changeHistory?: MemberChangeLog[];     // 变更历史表格整理后的信息变更整包（编辑时有效，手动编辑与自动生成同等对待）
   }) => void;
   onCancel: () => void;
 }
 
-// 变更历史行：状态行可编辑（V3.4 功能 2a），信息变更行只读留痕（V3.4 功能 2b）
+// 变更历史行：状态行与信息变更行均可编辑（V3.4 功能 2a/2b，信息变更行可维护、仅审计展示）
 interface HistoryRow {
   key: string;
   type: 'status' | 'info';
@@ -36,6 +37,17 @@ interface HistoryRow {
   oldValue?: string;
   newValue?: string;
 }
+
+// 信息变更行可选字段（与保存时自动 diff 覆盖的信息字段一致；"状态"由状态行单独管理，不在此列）
+const CHANGE_FIELD_OPTIONS = [
+  '姓名',
+  '部室',
+  '部门/支部',
+  '党小组',
+  '支委职务',
+  '党小组组长',
+  '联系电话',
+].map((f) => ({ label: f, value: f }));
 
 const PRESET_DEPARTMENTS = [
   '第一党支部',
@@ -85,7 +97,7 @@ export default function MemberForm({ open, editingMember, onOk, onCancel }: Memb
           ...normalized,
         });
         setCurrentStatus(normalized.status);
-        // 初始化变更历史：状态行（可编辑）+ 信息变更行（只读），按日期正序展示
+        // 初始化变更历史：状态行 + 信息变更行（均可编辑），按日期正序展示
         const rows: HistoryRow[] = [];
         (normalized.statusHistory || []).forEach((c) => {
           rows.push({ key: uuidv4(), type: 'status', date: c.date, status: c.status });
@@ -111,7 +123,7 @@ export default function MemberForm({ open, editingMember, onOk, onCancel }: Memb
     }
   };
 
-  // 变更历史表格操作（V3.4 功能 2a：仅状态行可编辑）
+  // 变更历史表格操作（V3.4 功能 2a/2b：状态行与信息变更行均可编辑）
   const updateHistoryRow = (key: string, patch: Partial<HistoryRow>) => {
     setHistoryRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
   };
@@ -120,22 +132,25 @@ export default function MemberForm({ open, editingMember, onOk, onCancel }: Memb
     setHistoryRows((prev) => prev.filter((r) => r.key !== key));
   };
 
-  const addHistoryRow = () => {
+  // 添加记录：按所选类型新增状态行或信息变更行（日期默认今天，保存时统一校验与排序）
+  const addHistoryRow = (type: HistoryRow['type']) => {
     setHistoryRows((prev) => [
       ...prev,
-      { key: uuidv4(), type: 'status', date: dayjs().format('YYYY-MM-DD'), status: 'active' },
+      type === 'status'
+        ? { key: uuidv4(), type: 'status', date: dayjs().format('YYYY-MM-DD'), status: 'active' }
+        : { key: uuidv4(), type: 'info', date: dayjs().format('YYYY-MM-DD'), field: '姓名', oldValue: '', newValue: '' },
     ]);
   };
 
   const handleOk = async () => {
     try {
       const values = await form.validateFields();
-      // 校验变更历史状态行：日期不可重复、不可晚于今天（仅有的两条校验）
-      const statusRows = historyRows.filter((r) => r.type === 'status');
+      // 校验变更历史：所有记录日期必填且不可晚于今天；状态记录间日期不可重复（沿用现有规则，
+      // 信息变更行同日多条属正常留痕形态——自动 diff 一次保存即可产生多条同日记录，故不参与同日去重）
       const today = dayjs().format('YYYY-MM-DD');
-      for (const r of statusRows) {
+      for (const r of historyRows) {
         if (!r.date) {
-          message.error('变更历史存在未选择日期的状态记录');
+          message.error(r.type === 'status' ? '变更历史存在未选择日期的状态记录' : '变更历史存在未选择日期的信息变更记录');
           return;
         }
         if (r.date > today) {
@@ -143,16 +158,25 @@ export default function MemberForm({ open, editingMember, onOk, onCancel }: Memb
           return;
         }
       }
+      const statusRows = historyRows.filter((r) => r.type === 'status');
       const dates = statusRows.map((r) => r.date);
       if (new Set(dates).size !== dates.length) {
         message.error('变更历史中存在重复日期的状态记录');
         return;
       }
-      // 状态行整包按日期排序后随表单提交（替代原"仅追加"逻辑）
+      const infoRows = historyRows.filter((r) => r.type === 'info');
+      if (infoRows.some((r) => !r.field)) {
+        message.error('变更历史存在未选择字段的信息变更记录');
+        return;
+      }
+      // 状态行与信息行分别按日期排序后整包随表单提交（替代原"仅追加"逻辑，手动编辑与自动生成的行同等对待）
       const statusHistory: MemberStatusChange[] = [...statusRows]
         .sort((a, b) => a.date.localeCompare(b.date))
         .map((r) => ({ status: r.status as MemberStatus, date: r.date }));
-      onOk({ ...values, statusHistory });
+      const changeHistory: MemberChangeLog[] = [...infoRows]
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map((r) => ({ date: r.date, field: r.field as string, oldValue: r.oldValue ?? '', newValue: r.newValue ?? '' }));
+      onOk({ ...values, statusHistory, changeHistory });
       form.resetFields();
       setHistoryRows([]);
     } catch {
@@ -175,19 +199,17 @@ export default function MemberForm({ open, editingMember, onOk, onCancel }: Memb
         v === 'status' ? <Tag color="blue">状态</Tag> : <Tag>信息变更</Tag>,
     },
     {
+      // 变更日期：状态行与信息变更行统一行内可改（禁未来日期）
       title: '变更日期', dataIndex: 'date', key: 'date', width: 168,
-      render: (v: string, row: HistoryRow) =>
-        row.type === 'status' ? (
-          <DatePicker
-            size="small"
-            style={{ width: 142 }}
-            value={v ? dayjs(v) : null}
-            disabledDate={(d: Dayjs) => d.isAfter(dayjs(), 'day')}
-            onChange={(d) => updateHistoryRow(row.key, { date: d ? d.format('YYYY-MM-DD') : '' })}
-          />
-        ) : (
-          <span style={{ color: 'rgba(0, 0, 0, 0.65)' }}>{v}</span>
-        ),
+      render: (v: string, row: HistoryRow) => (
+        <DatePicker
+          size="small"
+          style={{ width: 142 }}
+          value={v ? dayjs(v) : null}
+          disabledDate={(d: Dayjs) => d.isAfter(dayjs(), 'day')}
+          onChange={(d) => updateHistoryRow(row.key, { date: d ? d.format('YYYY-MM-DD') : '' })}
+        />
+      ),
     },
     {
       title: '内容 / 状态', key: 'content',
@@ -201,21 +223,44 @@ export default function MemberForm({ open, editingMember, onOk, onCancel }: Memb
             onChange={(v: MemberStatus) => updateHistoryRow(row.key, { status: v })}
           />
         ) : (
-          <span style={{ color: 'rgba(0, 0, 0, 0.65)' }}>
-            {row.field}：{row.oldValue || '（空）'} → {row.newValue || '（空）'}
-          </span>
+          // 信息变更行行内编辑：字段限定自动 diff 覆盖范围（历史数据中超出范围的字段值动态补入选项，避免丢失显示）
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Select
+              size="small"
+              style={{ width: 104, flexShrink: 0 }}
+              value={row.field}
+              options={
+                row.field && !CHANGE_FIELD_OPTIONS.some((o) => o.value === row.field)
+                  ? [...CHANGE_FIELD_OPTIONS, { label: row.field, value: row.field }]
+                  : CHANGE_FIELD_OPTIONS
+              }
+              onChange={(v: string) => updateHistoryRow(row.key, { field: v })}
+            />
+            <Input
+              size="small"
+              style={{ flex: 1, minWidth: 56 }}
+              value={row.oldValue ?? ''}
+              placeholder="旧值"
+              onChange={(e) => updateHistoryRow(row.key, { oldValue: e.target.value })}
+            />
+            <span style={{ color: 'rgba(0, 0, 0, 0.45)', flexShrink: 0 }}>→</span>
+            <Input
+              size="small"
+              style={{ flex: 1, minWidth: 56 }}
+              value={row.newValue ?? ''}
+              placeholder="新值"
+              onChange={(e) => updateHistoryRow(row.key, { newValue: e.target.value })}
+            />
+          </div>
         ),
     },
     {
       title: '操作', key: 'action', width: 64,
-      render: (_: unknown, row: HistoryRow) =>
-        row.type === 'status' ? (
-          <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => removeHistoryRow(row.key)}>
-            删除
-          </Button>
-        ) : (
-          <span style={{ color: 'rgba(0, 0, 0, 0.25)' }}>—</span>
-        ),
+      render: (_: unknown, row: HistoryRow) => (
+        <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => removeHistoryRow(row.key)}>
+          删除
+        </Button>
+      ),
     },
   ];
 
@@ -286,13 +331,13 @@ export default function MemberForm({ open, editingMember, onOk, onCancel }: Memb
           </Form.Item>
         )}
       </Form>
-      {/* 变更历史（V3.4 功能 2a + 2b：状态行可编辑，信息变更行只读留痕） */}
+      {/* 变更历史（V3.4 功能 2a + 2b：状态行与信息变更行均可编辑维护，整包提交） */}
       {editingMember && (
         <div style={{ borderTop: '1px dashed #e5e7eb', marginTop: 4, paddingTop: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontWeight: 600 }}>
             变更历史
             <Tag color="blue">状态行可编辑</Tag>
-            <Tag>信息行只读</Tag>
+            <Tag color="purple">信息行可编辑</Tag>
           </div>
           <Table
             size="small"
@@ -302,11 +347,21 @@ export default function MemberForm({ open, editingMember, onOk, onCancel }: Memb
             pagination={false}
             locale={{ emptyText: '暂无变更记录' }}
           />
-          <Button size="small" icon={<PlusOutlined />} style={{ marginTop: 10 }} onClick={addHistoryRow}>
-            添加记录
-          </Button>
+          <Dropdown
+            menu={{
+              items: [
+                { key: 'status', label: '状态记录' },
+                { key: 'info', label: '信息变更' },
+              ],
+              onClick: ({ key }) => addHistoryRow(key === 'info' ? 'info' : 'status'),
+            }}
+          >
+            <Button size="small" icon={<PlusOutlined />} style={{ marginTop: 10 }}>
+              添加记录
+            </Button>
+          </Dropdown>
           <p style={{ fontSize: 12, color: 'rgba(0, 0, 0, 0.45)', margin: '8px 0 0', lineHeight: 1.7 }}>
-            校验：日期不可与其他记录重复、不可晚于今天；按日期自动排序保存，参会候选名单与考勤统计自动按新时间线重算，无需迁移数据。
+            校验：日期不可晚于今天，状态记录间不可同日；按日期自动排序整包保存，参会候选名单与考勤统计自动按新时间线重算。信息变更仅作审计展示，不参与统计判定。
           </p>
         </div>
       )}
