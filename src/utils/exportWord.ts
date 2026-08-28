@@ -157,7 +157,7 @@ export async function exportDashboardReport(
         children: [
           createCell('会议总数', { bold: true, color: 'FFFFFF', bg: HEADER_BG, fontSize: 22 }),
           createCell('平均出勤率', { bold: true, color: 'FFFFFF', bg: HEADER_BG, fontSize: 22 }),
-          createCell('在职人员', { bold: true, color: 'FFFFFF', bg: HEADER_BG, fontSize: 22 }),
+          createCell('在职党员', { bold: true, color: 'FFFFFF', bg: HEADER_BG, fontSize: 22 }),
           createCell('本月会议', { bold: true, color: 'FFFFFF', bg: HEADER_BG, fontSize: 22 }),
         ],
       }),

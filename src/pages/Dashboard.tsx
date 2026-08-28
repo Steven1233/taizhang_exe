@@ -93,7 +93,9 @@ export default function Dashboard() {
 
   // 出勤率排行 - 降序排列，并构建详细统计
   // V3.3：时间线在职口径——行范围为"年内任一会议日期时点在职"的人员，每场会议按该场日期单独判定计入
+  // V3.4 功能10：排行仅显示当前在职人员（调离/借调/离职者不出现，状态恢复在职后自动重新出现）
   const memberStats = membersActiveDuring(members, yearMeetings)
+    .filter((member) => member.status === 'active')
     .map((member) => {
       let total = 0;
       let attended = 0;
@@ -121,21 +123,25 @@ export default function Dashboard() {
     .sort((a, b) => b.rate - a.rate);
 
   // 部门出勤率 - 排除支委会会议（V3.3：时间线在职口径，行范围与逐场判定同步）
+  // V3.4 功能6：按会议时点部门统计——每条考勤计入开会当天所属部门（优先读参会记录快照，
+  // 人员换部门不改写历史），旧数据无快照回退当前部门
   const deptRates: Record<string, { total: number; attended: number }> = {};
   membersActiveDuring(members, yearMeetings).forEach((member) => {
-    const dept = Array.isArray(member.department)
+    // 当前部门（参会记录无快照时的回退值）
+    const currentDept = Array.isArray(member.department)
       ? member.department.filter(Boolean).join('、')
       : (member.department || '').trim();
-    if (!dept) return;
-    if (!deptRates[dept]) {
-      deptRates[dept] = { total: 0, attended: 0 };
-    }
     yearMeetings.forEach((m) => {
       // 支委会不计入部门出勤
       if (m.type.includes('支部委员会')) return;
       if (!isActiveAt(member, m.date)) return; // 离开期间不计入
       const p = m.participants.find((pt) => pt.memberId === member.id);
       if (p) {
+        const dept = p.departmentSnapshot !== undefined ? p.departmentSnapshot.trim() : currentDept;
+        if (!dept) return; // 无部门可归属
+        if (!deptRates[dept]) {
+          deptRates[dept] = { total: 0, attended: 0 };
+        }
         deptRates[dept].total++;
         if (p.status === 'attended') deptRates[dept].attended++;
       }
@@ -445,7 +451,7 @@ export default function Dashboard() {
         <Col span={6}>
           <Card className="stat-card">
             <div className="stat-value">{activeMembers.length}</div>
-            <div className="stat-label">在职人员总数</div>
+            <div className="stat-label">在职党员总数</div>
           </Card>
         </Col>
         <Col span={6}>
@@ -481,7 +487,23 @@ export default function Dashboard() {
       {/* 中段：左列出勤率排行；右列部门出勤对比 + 月度谈心谈话趋势（V3.2 布局调整） */}
       <Row gutter={16}>
         <Col span={12}>
-          <Card title="出勤率排行（降序）">
+          <Card
+            title={
+              <span>
+                党员出勤率排行（降序）
+                <Tooltip
+                  title={
+                    <div>
+                      <div>仅显示当前在职人员；调离 / 借调 / 离职者不参与排行，</div>
+                      <div>状态恢复在职后自动重新出现。</div>
+                    </div>
+                  }
+                >
+                  <QuestionCircleOutlined style={{ marginLeft: 6, color: '#999', cursor: 'help' }} />
+                </Tooltip>
+              </span>
+            }
+          >
             {memberStats.length > 0 ? (
               <ReactECharts
                 option={rateBarOption}
@@ -496,12 +518,14 @@ export default function Dashboard() {
           <Card
             title={
               <span>
-                部门出勤对比
+                部门出勤对比（按会议时点部门统计）
                 <Tooltip
                   title={
                     <div>
                       <div>计算方式：</div>
-                      <div>部门出勤率 = 该部门所有在职人员出席次数 / 该部门所有在职人员应参会次数 × 100%</div>
+                      <div>部门出勤率 = 该部门人员出席次数 / 该部门人员应参会次数 × 100%</div>
+                      <div style={{ marginTop: 4 }}>· 按会议时点部门统计：每条考勤计入开会当天所属部门，人员换部门不改写历史</div>
+                      <div>· 旧数据无部门快照时按当前部门统计</div>
                       <div style={{ marginTop: 4, color: '#faad14' }}>
                         注意：支委会仅统计有支委职务的人员，不纳入部门单独出勤计算。
                       </div>

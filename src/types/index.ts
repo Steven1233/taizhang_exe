@@ -151,6 +151,14 @@ export interface MemberStatusChange {
   date: string;          // 变更日期 YYYY-MM-DD
 }
 
+// 人员信息变更留痕记录（V3.4 功能 2b：编辑保存时自动 diff 生成，只读展示，不参与统计判定）
+export interface MemberChangeLog {
+  date: string;      // 变更日期 YYYY-MM-DD
+  field: string;     // 变更字段（中文标签，如"党小组"）
+  oldValue: string;  // 变更前值
+  newValue: string;  // 变更后值
+}
+
 // 组织人员
 export interface Member {
   id: string;
@@ -162,7 +170,8 @@ export interface Member {
   partyGroup: string;
   isGroupLeader: boolean;
   committeeRole: string;
-  statusHistory?: MemberStatusChange[];  // 状态变更历史（按时间正序）
+  statusHistory?: MemberStatusChange[];  // 状态变更历史（按时间正序，可编辑）
+  changeHistory?: MemberChangeLog[];      // 信息变更留痕（自动生成，只读）
   createdAt: string;
   updatedAt: string;
 }
@@ -175,6 +184,10 @@ export interface Participant {
   isTemporary: boolean;
   leaveReason?: string;
   isGuest?: boolean;  // 列席人员标记（V3.1：与普通出席区分）
+  // V3.4 功能6：会议时点信息快照（保存会议时写入当时的部门/部室）
+  // 统计与导出优先读快照（人员换部门不改写历史），旧数据无快照回退当前值
+  departmentSnapshot?: string;  // 保存时的部门/支部
+  titleSnapshot?: string;       // 保存时的部室
 }
 
 // 会议记录

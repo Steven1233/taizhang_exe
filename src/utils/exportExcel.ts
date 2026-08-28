@@ -6,11 +6,13 @@ import { countActiveAttendance, membersActiveDuring, isActiveAt } from './member
 
 // ==================== 样式辅助 ====================
 
-function setColWidths(ws: XLSX.WorkSheet, widths: number[]) {
+/** 设置列宽（导出供组长模板/备份 Excel 复用） */
+export function setColWidths(ws: XLSX.WorkSheet, widths: number[]) {
   ws['!cols'] = widths.map((w) => ({ wch: w }));
 }
 
-function applyHeaderStyle(ws: XLSX.WorkSheet, rowIdx: number, colCount: number) {
+/** 表头行样式（导出供组长模板/备份 Excel 复用） */
+export function applyHeaderStyle(ws: XLSX.WorkSheet, rowIdx: number, colCount: number) {
   for (let c = 0; c < colCount; c++) {
     const addr = XLSX.utils.encode_cell({ r: rowIdx, c });
     if (!ws[addr]) continue;
@@ -114,12 +116,14 @@ function buildFileName(start: string, end: string): string {
 
 // ==================== 会议明细表（主表/子表通用） ====================
 
-const DETAIL_HEADERS = [
+/** 台账 17 列表头（V3.4 导出：组长填报模板 / 备份 Excel / 台账导出共用同字段结构） */
+export const DETAIL_HEADERS = [
   '序号', '会议名称', '会议日期', '会议时间', '会议类型', '所属党小组',
   '会议地点', '主持人', '记录人', '会议议题', '会议决议/结论',
   '应到人数', '实到人数', '请假人数', '缺席人数', '出勤率', '参会人员名单',
 ];
-const DETAIL_COL_WIDTHS = [6, 24, 12, 14, 18, 14, 22, 10, 10, 30, 30, 8, 8, 8, 8, 8, 50];
+/** 台账明细列宽（导出供组长模板复用） */
+export const DETAIL_COL_WIDTHS = [6, 24, 12, 14, 18, 14, 22, 10, 10, 30, 30, 8, 8, 8, 8, 8, 50];
 
 /** 构建一行会议数据（V3.3：出勤统计按时间线在职口径；名单按"参会/请假/缺席"分栏换行） */
 function buildMeetingRow(m: Meeting, seq: number, members: Member[]): (string | number)[] {
@@ -169,8 +173,8 @@ function buildMeetingRow(m: Meeting, seq: number, members: Member[]): (string | 
   ];
 }
 
-/** 生成会议明细 Sheet（主表与子表结构一致；V3.3：支持表头字段标题覆盖） */
-function buildDetailSheet(
+/** 生成会议明细 Sheet（主表与子表结构一致；V3.4 导出供自动备份 Excel 复用） */
+export function buildDetailSheet(
   meetings: Meeting[],
   subtitlePrefix: string,
   subtitlePeriod: string,
@@ -227,6 +231,64 @@ function buildDetailSheet(
   return ws;
 }
 
+// ==================== 分类子表（V3.4 提取：台账导出与自动备份 Excel 共用） ====================
+
+/** 按会议类型追加分类子表（支委会/党员大会/各党小组会/党课/组织生活会/民主生活会/主题党日活动） */
+export function appendCategorySheets(
+  wb: XLSX.WorkBook,
+  meetings: Meeting[],
+  subtitlePeriod: string,
+  members: Member[]
+): void {
+  // 支委会
+  const committeeMeetings = meetings.filter((m) => m.type.includes('支部委员会'));
+  const wsCommittee = buildDetailSheet(committeeMeetings, '支委会', subtitlePeriod, members);
+  if (wsCommittee) XLSX.utils.book_append_sheet(wb, wsCommittee, '支委会');
+
+  // 党员大会
+  const memberMeetingMeetings = meetings.filter((m) => m.type.includes('支部党员大会'));
+  const wsMemberMeeting = buildDetailSheet(memberMeetingMeetings, '党员大会', subtitlePeriod, members);
+  if (wsMemberMeeting) XLSX.utils.book_append_sheet(wb, wsMemberMeeting, '党员大会');
+
+  // 各党小组会（动态生成所有有数据的党小组子表）
+  const groupMeetingMeetings = meetings.filter((m) => m.type.includes('党小组会'));
+  const allGroups = new Set<string>();
+  groupMeetingMeetings.forEach((m) => {
+    (m.partyGroups || []).forEach((g) => {
+      if (g) allGroups.add(g);
+    });
+  });
+  sortPartyGroups([...allGroups]).forEach((group) => {
+    const groupMeetings = groupMeetingMeetings.filter(
+      (m) => (m.partyGroups || []).includes(group)
+    );
+    const wsGroup = buildDetailSheet(groupMeetings, `${group}会`, subtitlePeriod, members);
+    if (wsGroup) XLSX.utils.book_append_sheet(wb, wsGroup, `${group}会`);
+  });
+
+  // 党课（V3.3 新增子表）
+  const partyLectureMeetings = meetings.filter((m) => m.type.includes('党课'));
+  const wsPartyLecture = buildDetailSheet(partyLectureMeetings, '党课', subtitlePeriod, members);
+  if (wsPartyLecture) XLSX.utils.book_append_sheet(wb, wsPartyLecture, '党课');
+
+  // 组织生活会
+  const organizationalMeetings = meetings.filter((m) => m.type.includes('组织生活会'));
+  const wsOrganizational = buildDetailSheet(organizationalMeetings, '组织生活会', subtitlePeriod, members);
+  if (wsOrganizational) XLSX.utils.book_append_sheet(wb, wsOrganizational, '组织生活会');
+
+  // 民主生活会
+  const democraticMeetings = meetings.filter((m) => m.type.includes('民主生活会'));
+  const wsDemocratic = buildDetailSheet(democraticMeetings, '民主生活会', subtitlePeriod, members);
+  if (wsDemocratic) XLSX.utils.book_append_sheet(wb, wsDemocratic, '民主生活会');
+
+  // 主题党日活动（V3.3 新增子表："会议议题"列改为"活动内容"）
+  const partyDayMeetings = meetings.filter((m) => m.type.includes('主题党日活动'));
+  const wsPartyDay = buildDetailSheet(partyDayMeetings, '主题党日活动', subtitlePeriod, members, {
+    '会议议题': '活动内容',
+  });
+  if (wsPartyDay) XLSX.utils.book_append_sheet(wb, wsPartyDay, '主题党日活动');
+}
+
 // ==================== 主导出函数 ====================
 
 /**
@@ -254,54 +316,7 @@ export async function exportAnnualLedger(
   }
 
   // ============ 分类子表（字段与会议记录明细一致） ============
-
-  // 支委会
-  const committeeMeetings = yearMeetings.filter((m) => m.type.includes('支部委员会'));
-  const wsCommittee = buildDetailSheet(committeeMeetings, '支委会', subtitlePeriod, members);
-  if (wsCommittee) XLSX.utils.book_append_sheet(wb, wsCommittee, '支委会');
-
-  // 党员大会
-  const memberMeetingMeetings = yearMeetings.filter((m) => m.type.includes('支部党员大会'));
-  const wsMemberMeeting = buildDetailSheet(memberMeetingMeetings, '党员大会', subtitlePeriod, members);
-  if (wsMemberMeeting) XLSX.utils.book_append_sheet(wb, wsMemberMeeting, '党员大会');
-
-  // 各党小组会（动态生成所有有数据的党小组子表）
-  const groupMeetingMeetings = yearMeetings.filter((m) => m.type.includes('党小组会'));
-  const allGroups = new Set<string>();
-  groupMeetingMeetings.forEach((m) => {
-    (m.partyGroups || []).forEach((g) => {
-      if (g) allGroups.add(g);
-    });
-  });
-  sortPartyGroups([...allGroups]).forEach((group) => {
-    const groupMeetings = groupMeetingMeetings.filter(
-      (m) => (m.partyGroups || []).includes(group)
-    );
-    const wsGroup = buildDetailSheet(groupMeetings, `${group}会`, subtitlePeriod, members);
-    if (wsGroup) XLSX.utils.book_append_sheet(wb, wsGroup, `${group}会`);
-  });
-
-  // 党课（V3.3 新增子表）
-  const partyLectureMeetings = yearMeetings.filter((m) => m.type.includes('党课'));
-  const wsPartyLecture = buildDetailSheet(partyLectureMeetings, '党课', subtitlePeriod, members);
-  if (wsPartyLecture) XLSX.utils.book_append_sheet(wb, wsPartyLecture, '党课');
-
-  // 组织生活会
-  const organizationalMeetings = yearMeetings.filter((m) => m.type.includes('组织生活会'));
-  const wsOrganizational = buildDetailSheet(organizationalMeetings, '组织生活会', subtitlePeriod, members);
-  if (wsOrganizational) XLSX.utils.book_append_sheet(wb, wsOrganizational, '组织生活会');
-
-  // 民主生活会
-  const democraticMeetings = yearMeetings.filter((m) => m.type.includes('民主生活会'));
-  const wsDemocratic = buildDetailSheet(democraticMeetings, '民主生活会', subtitlePeriod, members);
-  if (wsDemocratic) XLSX.utils.book_append_sheet(wb, wsDemocratic, '民主生活会');
-
-  // 主题党日活动（V3.3 新增子表："会议议题"列改为"活动内容"）
-  const partyDayMeetings = yearMeetings.filter((m) => m.type.includes('主题党日活动'));
-  const wsPartyDay = buildDetailSheet(partyDayMeetings, '主题党日活动', subtitlePeriod, members, {
-    '会议议题': '活动内容',
-  });
-  if (wsPartyDay) XLSX.utils.book_append_sheet(wb, wsPartyDay, '主题党日活动');
+  appendCategorySheets(wb, yearMeetings, subtitlePeriod, members);
 
   // ============ 参会考勤统计 ============
   const headers2 = ['序号', '姓名', '部室', '部门/支部', '应参加次数', '实际出席次数', '请假次数', '缺席次数', '出勤率'];
@@ -319,6 +334,9 @@ export async function exportAnnualLedger(
     let attended = 0;
     let leave = 0;
     let absent = 0;
+    // V3.4 功能6：记录统计期内最新一次带快照的参会记录（部门/部室优先读快照，人员换部门不改写历史）
+    let snapDept: string | undefined;
+    let snapTitle: string | undefined;
     yearMeetings.forEach((meeting) => {
       if (!isActiveAt(member, meeting.date)) return; // 离开期间不计入，离开前/回归后照常计入
       const p = meeting.participants.find((pp) => pp.memberId === member.id);
@@ -327,18 +345,26 @@ export async function exportAnnualLedger(
         if (p.status === 'attended') attended++;
         else if (p.status === 'leave') leave++;
         else if (p.status === 'absent') absent++;
+        if (p.departmentSnapshot !== undefined || p.titleSnapshot !== undefined) {
+          snapDept = p.departmentSnapshot;
+          snapTitle = p.titleSnapshot;
+        }
       }
     });
     const rate = shouldAttend > 0 ? ((attended / shouldAttend) * 100).toFixed(1) + '%' : '-';
-    return { member, shouldAttend, attended, leave, absent, rate: shouldAttend > 0 ? (attended / shouldAttend) * 100 : -1, rateStr: rate };
+    return { member, shouldAttend, attended, leave, absent, rate: shouldAttend > 0 ? (attended / shouldAttend) * 100 : -1, rateStr: rate, snapDept, snapTitle };
   }).sort((a, b) => b.rate - a.rate);
 
   memberStats.forEach((s, i) => {
-    const dept = Array.isArray(s.member.department)
-      ? s.member.department.filter(Boolean).join('、')
-      : (s.member.department || '');
+    // V3.4 功能6：部门/部室优先读快照，旧数据无快照回退当前值
+    const dept = s.snapDept !== undefined
+      ? s.snapDept
+      : Array.isArray(s.member.department)
+        ? s.member.department.filter(Boolean).join('、')
+        : (s.member.department || '');
+    const title = s.snapTitle !== undefined ? s.snapTitle : (s.member.title || '');
     sheet2Data.push([
-      i + 1, s.member.name, s.member.title || '-', dept || '-',
+      i + 1, s.member.name, title || '-', dept || '-',
       s.shouldAttend, s.attended, s.leave, s.absent, s.rateStr,
     ]);
   });

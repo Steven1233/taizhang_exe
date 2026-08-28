@@ -6,17 +6,17 @@ import type { Member, Meeting, MemberStatus, MemberStatusChange } from '../types
  * 规则：
  * - 无历史记录：按当前 status 判断
  * - 有历史：取变更日期 <= 指定日期 的最近一次变更状态
- * - 指定日期早于首次记录：视为在职（入职前默认在职）
+ * - 指定日期早于首条记录：沿用首条记录状态（V3.4 规则修正：
+ *   原默认视为在职，首条即调离/借调者调离前的会议不再误计在职）
  */
 export function isActiveAt(member: Member, date: string): boolean {
   const history = member.statusHistory;
   if (!history || history.length === 0) {
     return member.status === 'active';
   }
-  const changes = [...history]
-    .sort((a, b) => a.date.localeCompare(b.date))
-    .filter((c) => c.date <= date);
-  if (changes.length === 0) return true;
+  const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date));
+  const changes = sorted.filter((c) => c.date <= date);
+  if (changes.length === 0) return sorted[0].status === 'active'; // 早于首条：沿用首条状态
   return changes[changes.length - 1].status === 'active';
 }
 
@@ -58,20 +58,35 @@ export function membersActiveDuring(members: Member[], meetings: Meeting[]): Mem
 
 /**
  * 追加状态变更记录（若状态未变化则不追加）
- * 返回更新后的 statusHistory 数组
+ *
+ * V3.4 修复：去重基准由"数组末位"改为"变更日期时点的既有状态"——
+ * 回溯补录早于末位的变更时不再判断失真；返回数组恒按日期正序。
+ * - 变更日期与既有记录同日：覆盖该条状态（避免同日两条）
+ * - 变更日期早于首条记录：以首条状态为基准（与 isActiveAt 口径一致）
  */
 export function appendStatusChange(
   member: Member,
   newStatus: MemberStatus,
   changeDate: string
 ): MemberStatusChange[] {
-  const history = member.statusHistory && member.statusHistory.length > 0
+  const base = member.statusHistory && member.statusHistory.length > 0
     ? [...member.statusHistory]
     : [{ status: member.status || 'active', date: (member.createdAt || changeDate).substring(0, 10) }];
-  const last = history[history.length - 1];
-  if (last && last.status === newStatus) {
-    return history;  // 状态未变化
+  const history = base.sort((a, b) => a.date.localeCompare(b.date));
+  // 同日已有记录：直接覆盖状态
+  const existingIdx = history.findIndex((c) => c.date === changeDate);
+  if (existingIdx >= 0) {
+    const updated = [...history];
+    updated[existingIdx] = { status: newStatus, date: changeDate };
+    return updated;
+  }
+  // 去重基准：变更日期时点的既有状态（早于首条时沿用首条状态）
+  const changes = history.filter((c) => c.date <= changeDate);
+  const baseline = changes.length > 0 ? changes[changes.length - 1].status : history[0].status;
+  if (baseline === newStatus) {
+    return history; // 该时点已是目标状态，无需追加
   }
   history.push({ status: newStatus, date: changeDate });
-  return history;
+  // 追加后重排，保证返回数组恒按日期正序（回溯补录早于末位的变更时插入正确位置）
+  return history.sort((a, b) => a.date.localeCompare(b.date));
 }

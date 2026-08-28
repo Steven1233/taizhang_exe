@@ -21,11 +21,12 @@
 import { db, normalizeMember } from '../db';
 import type { Member, Meeting, OperationLog, TalkRecord, Participant } from '../types';
 import { migrateMeetingTypeName, MEMBER_STATUS_LABEL, TALK_METHOD_LABEL } from '../types';
+import { buildDetailSheet, appendCategorySheets } from './exportExcel';
 
 // ==================== 类型定义 ====================
 
 /** 当前应用版本 */
-export const APP_VERSION = '3.2.0';
+export const APP_VERSION = '3.4.0';
 
 /** 当前数据模式版本 */
 export const SCHEMA_VERSION = 3;
@@ -64,8 +65,8 @@ export interface BackupData {
 
 // ==================== 导出备份 ====================
 
-/** 导出当前数据为 JSON 备份文件（scope 可选：全部/仅会议/仅谈话） */
-export async function createBackup(scope: BackupScope = 'all'): Promise<Blob> {
+/** 读取当前库构建 BackupData（手动备份与自动备份共用；scope 可选：全部/仅会议/仅谈话） */
+async function buildBackupData(scope: BackupScope = 'all'): Promise<BackupData> {
   const [allMembers, allMeetings, allOperationLogs, allTalkRecords] = await Promise.all([
     db.members.toArray(),
     db.meetings.toArray(),
@@ -79,7 +80,7 @@ export async function createBackup(scope: BackupScope = 'all'): Promise<Blob> {
   // 子集导出（组长侧同步用）不含操作日志，保持文件轻量且不干扰管理员日志
   const operationLogs = scope === 'all' ? allOperationLogs : [];
 
-  const backup: BackupData = {
+  return {
     appVersion: APP_VERSION,
     schemaVersion: SCHEMA_VERSION,
     backupTime: new Date().toISOString(),
@@ -90,7 +91,11 @@ export async function createBackup(scope: BackupScope = 'all'): Promise<Blob> {
       talkRecords:    { count: talkRecords.length,    data: talkRecords },
     },
   };
+}
 
+/** 导出当前数据为 JSON 备份文件（scope 可选：全部/仅会议/仅谈话） */
+export async function createBackup(scope: BackupScope = 'all'): Promise<Blob> {
+  const backup = await buildBackupData(scope);
   return new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
 }
 
@@ -128,6 +133,44 @@ function serializeStatusHistory(member: Member): string {
     .join('; ');
 }
 
+/** 构建人员 Sheet 行数据（手动 Excel 备份与自动备份 Excel 共用） */
+function buildMemberSheetRows(members: Member[]): Record<string, string>[] {
+  return members.map((m) => ({
+    '姓名': m.name,
+    '部室': m.title || '',
+    '部门/支部': m.department || '',
+    '党小组': m.partyGroup || '',
+    '党小组组长': m.isGroupLeader ? '是' : '否',
+    '支委职务': m.committeeRole || '',
+    '联系电话': m.phone || '',
+    '状态': MEMBER_STATUS_LABEL[m.status],
+    '状态历史': serializeStatusHistory(m),
+    '创建时间': m.createdAt,
+    '更新时间': m.updatedAt,
+    '记录ID': m.id,
+  }));
+}
+
+/** 构建谈心谈话 Sheet 行数据（手动 Excel 备份与自动备份 Excel 共用） */
+function buildTalkSheetRows(talkRecords: TalkRecord[]): Record<string, string>[] {
+  return talkRecords.map((t) => ({
+    '谈话方式': TALK_METHOD_LABEL[t.method],
+    '谈话类型': t.type,
+    '谈话人': t.talkerName,
+    '谈话人职务': t.talkerTitle || '',
+    '谈话对象': (t.targetNames && t.targetNames.length > 0 ? t.targetNames : [t.targetName]).filter(Boolean).join('、'),
+    '谈话对象职务': t.targetTitle || '',
+    '联系人': t.contactPerson || '',
+    '日期': t.talkDate,
+    '时段': t.timePeriod === 'pm' ? '下午' : '上午',
+    '提纲': t.outline,
+    '地点': t.location,
+    '五必谈': t.isFiveMustTalk ? '是' : '否',
+    '备注': t.remark || '',
+    '记录ID': t.id,
+  }));
+}
+
 /** 导出当前数据为 Excel 备份文件（4 Sheet：人员/会议记录/谈心谈话/备份信息） */
 export async function createBackupExcel(scope: BackupScope = 'all'): Promise<Blob> {
   const XLSX = await import('xlsx-js-style');
@@ -145,20 +188,7 @@ export async function createBackupExcel(scope: BackupScope = 'all'): Promise<Blo
   const scopeLabel = scope === 'all' ? '全部数据' : scope === 'meetings' ? '仅会议记录' : '仅谈心谈话';
 
   // ---- Sheet: 人员 ----
-  const memberRows = members.map((m) => ({
-    '姓名': m.name,
-    '部室': m.title || '',
-    '部门/支部': m.department || '',
-    '党小组': m.partyGroup || '',
-    '党小组组长': m.isGroupLeader ? '是' : '否',
-    '支委职务': m.committeeRole || '',
-    '联系电话': m.phone || '',
-    '状态': MEMBER_STATUS_LABEL[m.status],
-    '状态历史': serializeStatusHistory(m),
-    '创建时间': m.createdAt,
-    '更新时间': m.updatedAt,
-    '记录ID': m.id,
-  }));
+  const memberRows = buildMemberSheetRows(members);
   const wsMembers = XLSX.utils.json_to_sheet(memberRows.length > 0 ? memberRows : [{ '姓名': '' }]);
   XLSX.utils.book_append_sheet(wb, wsMembers, '人员');
 
@@ -181,22 +211,7 @@ export async function createBackupExcel(scope: BackupScope = 'all'): Promise<Blo
   XLSX.utils.book_append_sheet(wb, wsMeetings, '会议记录');
 
   // ---- Sheet: 谈心谈话 ----
-  const talkRows = talkRecords.map((t) => ({
-    '谈话方式': TALK_METHOD_LABEL[t.method],
-    '谈话类型': t.type,
-    '谈话人': t.talkerName,
-    '谈话人职务': t.talkerTitle || '',
-    '谈话对象': (t.targetNames && t.targetNames.length > 0 ? t.targetNames : [t.targetName]).filter(Boolean).join('、'),
-    '谈话对象职务': t.targetTitle || '',
-    '联系人': t.contactPerson || '',
-    '日期': t.talkDate,
-    '时段': t.timePeriod === 'pm' ? '下午' : '上午',
-    '提纲': t.outline,
-    '地点': t.location,
-    '五必谈': t.isFiveMustTalk ? '是' : '否',
-    '备注': t.remark || '',
-    '记录ID': t.id,
-  }));
+  const talkRows = buildTalkSheetRows(talkRecords);
   const wsTalks = XLSX.utils.json_to_sheet(talkRows.length > 0 ? talkRows : [{ '谈话方式': '' }]);
   XLSX.utils.book_append_sheet(wb, wsTalks, '谈心谈话');
 
@@ -215,6 +230,159 @@ export async function createBackupExcel(scope: BackupScope = 'all'): Promise<Blo
 
   const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
   return new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+// ==================== 定时自动备份（V3.4 功能 1） ====================
+// 调度器与文件写入由主进程（electron/main.cjs）执行：主进程经 window.__autoBackupBridge
+// 拉取本模块生成的备份内容，按配置写入选定文件夹并滚动清理；配置经 localStorage 同步。
+
+export type AutoBackupFormat = 'json' | 'json+excel';
+export type AutoBackupInterval = '30min' | '1h' | 'daily8' | 'startup';
+
+/** 自动备份配置（持久化于 localStorage，主进程轮询读取） */
+export interface AutoBackupConfig {
+  enabled: boolean;
+  folderPath: string;
+  interval: AutoBackupInterval;
+  /** 保留份数（json+excel 模式下同一时间戳的一对文件记为一份），默认 30 */
+  keep: number;
+  format: AutoBackupFormat;
+}
+
+/** 上次自动备份执行状态（由主进程回写 localStorage，设置页展示） */
+export interface AutoBackupLastState {
+  time: string;       // 完成时间 ISO
+  ok: boolean;
+  error?: string;
+  files?: string[];   // 本次写入的文件名
+  trigger?: string;   // 手动触发时对应的触发标识（时间戳字符串）
+}
+
+export const AUTO_BACKUP_CFG_KEY = 'auto_backup_cfg';
+export const AUTO_BACKUP_TRIGGER_KEY = 'auto_backup_trigger';
+export const AUTO_BACKUP_LAST_KEY = 'auto_backup_last';
+
+/** 频率选项（与定时融合口径一致） */
+export const AUTO_BACKUP_INTERVAL_OPTIONS: { value: AutoBackupInterval; label: string }[] = [
+  { value: '30min', label: '每30分钟' },
+  { value: '1h', label: '每1小时' },
+  { value: 'daily8', label: '每天8点' },
+  { value: 'startup', label: '仅启动时' },
+];
+
+/** 保留份数选项 */
+export const AUTO_BACKUP_KEEP_OPTIONS = [10, 30, 50, 100];
+
+export function loadAutoBackupConfig(): AutoBackupConfig {
+  const intervals: AutoBackupInterval[] = ['30min', '1h', 'daily8', 'startup'];
+  try {
+    const raw = localStorage.getItem(AUTO_BACKUP_CFG_KEY);
+    if (raw) {
+      const cfg = JSON.parse(raw) as Partial<AutoBackupConfig>;
+      return {
+        enabled: cfg.enabled === true,
+        folderPath: typeof cfg.folderPath === 'string' ? cfg.folderPath : '',
+        interval: intervals.includes(cfg.interval as AutoBackupInterval)
+          ? (cfg.interval as AutoBackupInterval)
+          : 'daily8',
+        keep: Number(cfg.keep) > 0 ? Number(cfg.keep) : 30,
+        format: cfg.format === 'json+excel' ? 'json+excel' : 'json',
+      };
+    }
+  } catch {
+    // 配置损坏时回退默认值
+  }
+  return { enabled: false, folderPath: '', interval: 'daily8', keep: 30, format: 'json' };
+}
+
+export function saveAutoBackupConfig(config: AutoBackupConfig) {
+  localStorage.setItem(AUTO_BACKUP_CFG_KEY, JSON.stringify(config));
+}
+
+export function loadAutoBackupLast(): AutoBackupLastState | null {
+  try {
+    const raw = localStorage.getItem(AUTO_BACKUP_LAST_KEY);
+    return raw ? (JSON.parse(raw) as AutoBackupLastState) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** BACKUP_JSON 隐藏表：整库 JSON 按行分块存储的单块长度（单元格 32767 字符上限内留余量） */
+const BACKUP_JSON_CHUNK_SIZE = 30000;
+
+/** 隐藏表 BACKUP_JSON 的 Sheet 名（恢复时按此识别备份 Excel） */
+export const BACKUP_JSON_SHEET_NAME = 'BACKUP_JSON';
+
+/**
+ * 生成自动备份 Excel（V3.4 功能 1）：
+ * 人读版台账（会议明细 + 分类子表 + 人员 + 谈心谈话，与组长填报模板同字段结构）
+ * + 隐藏表 BACKUP_JSON（整库 JSON 分块存储，供整库无损恢复）
+ */
+export async function createAutoBackupExcel(backup: BackupData): Promise<Blob> {
+  const XLSX = await import('xlsx-js-style');
+
+  const members = backup.tables.members.data;
+  const meetings = [...backup.tables.meetings.data].sort((a, b) => a.date.localeCompare(b.date));
+  const talkRecords = backup.tables.talkRecords.data;
+
+  const wb = XLSX.utils.book_new();
+  const subtitlePeriod = `自动备份时间：${new Date(backup.backupTime).toLocaleString('zh-CN')}`;
+
+  // ---- 会议明细 + 分类子表（复用台账导出结构） ----
+  const wsMain = buildDetailSheet(meetings, '会议记录明细', subtitlePeriod, members);
+  if (wsMain) XLSX.utils.book_append_sheet(wb, wsMain, '会议记录明细');
+  appendCategorySheets(wb, meetings, subtitlePeriod, members);
+
+  // ---- 人员 / 谈心谈话（与手动 Excel 备份同结构） ----
+  const memberRows = buildMemberSheetRows(members);
+  const wsMembers = XLSX.utils.json_to_sheet(memberRows.length > 0 ? memberRows : [{ '姓名': '' }]);
+  XLSX.utils.book_append_sheet(wb, wsMembers, '人员');
+
+  const talkRows = buildTalkSheetRows(talkRecords);
+  const wsTalks = XLSX.utils.json_to_sheet(talkRows.length > 0 ? talkRows : [{ '谈话方式': '' }]);
+  XLSX.utils.book_append_sheet(wb, wsTalks, '谈心谈话');
+
+  // ---- 隐藏表 BACKUP_JSON：整库 JSON 按行分块存储（规避单元格字符上限） ----
+  const json = JSON.stringify(backup);
+  const chunkRows: (string | number)[][] = [];
+  for (let i = 0; i < json.length; i += BACKUP_JSON_CHUNK_SIZE) {
+    chunkRows.push([Math.floor(i / BACKUP_JSON_CHUNK_SIZE) + 1, json.slice(i, i + BACKUP_JSON_CHUNK_SIZE)]);
+  }
+  if (chunkRows.length === 0) chunkRows.push([1, '']);
+  const wsBackupJson = XLSX.utils.aoa_to_sheet(chunkRows);
+  wsBackupJson['!cols'] = [{ wch: 8 }, { wch: 100 }];
+  XLSX.utils.book_append_sheet(wb, wsBackupJson, BACKUP_JSON_SHEET_NAME);
+  // 标记为隐藏工作表（Hidden: 1），仅人读台账可见，不影响正常查看
+  const wbAny = wb as unknown as { Workbook?: { Sheets: { name: string; Hidden?: number }[] } };
+  wbAny.Workbook = wbAny.Workbook || { Sheets: [] };
+  wbAny.Workbook.Sheets.push({ name: BACKUP_JSON_SHEET_NAME, Hidden: 1 });
+
+  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+/** ArrayBuffer → base64（分块拼接，规避 String.fromCharCode 参数上限） */
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+/** 生成自动备份内容（主进程调度器经数据桥拉取）：整库 JSON 文本 + 可选 Excel base64 */
+export async function generateAutoBackupPayload(
+  format: AutoBackupFormat
+): Promise<{ json: string; excelBase64?: string }> {
+  const backup = await buildBackupData('all');
+  const json = JSON.stringify(backup);
+  if (format !== 'json+excel') return { json };
+  const blob = await createAutoBackupExcel(backup);
+  const excelBase64 = arrayBufferToBase64(await blob.arrayBuffer());
+  return { json, excelBase64 };
 }
 
 // ==================== Excel 备份解析（V3.1 新增） ====================
@@ -646,4 +814,104 @@ export function getBackupSummary(backup: BackupData): {
     appVersion:   backup.appVersion,
     schemaVersion: backup.schemaVersion,
   };
+}
+
+// ==================== 统一恢复/融合解析（V3.4 功能 1） ====================
+
+/** 备份文件来源格式 */
+export type BackupSourceKind = 'json' | 'excel-json' | 'excel-legacy';
+
+/** Excel 备份分类：BACKUP_JSON 整库 / 旧版逐表备份 / 非备份格式 */
+type ExcelBackupKind =
+  | { kind: 'excel-json'; data: BackupData; migrated: boolean }
+  | { kind: 'excel-legacy'; data: BackupData }
+  | { kind: 'other' }
+  | { kind: 'error'; error: string };
+
+/** 按 Sheet 特征分类解析 Excel 备份（恢复入口与融合入口共用） */
+async function classifyExcelBackup(file: File): Promise<ExcelBackupKind> {
+  try {
+    const XLSX = await import('xlsx-js-style');
+    const buffer = await file.arrayBuffer();
+    const wb = XLSX.read(new Uint8Array(buffer), { type: 'array' });
+
+    // 优先：BACKUP_JSON 隐藏表 → 拼块还原整库 JSON，与 JSON 恢复走同一代码路径（无损）
+    if (wb.SheetNames.includes(BACKUP_JSON_SHEET_NAME)) {
+      const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[BACKUP_JSON_SHEET_NAME], {
+        header: 1,
+        defval: '',
+      });
+      const chunks = rows
+        .filter((r) => r.length >= 2 && String(r[1] ?? '') !== '')
+        .sort((a, b) => Number(a[0]) - Number(b[0]))
+        .map((r) => String(r[1]));
+      let raw: unknown;
+      try {
+        raw = JSON.parse(chunks.join(''));
+      } catch {
+        return { kind: 'error', error: 'BACKUP_JSON 隐藏表数据损坏，无法还原整库备份' };
+      }
+      const result = parseBackupFile(raw as Record<string, unknown>);
+      if (!result.success) return { kind: 'error', error: result.error };
+      return { kind: 'excel-json', data: result.data, migrated: result.migrated };
+    }
+
+    // 其次：旧版 Excel 备份（V3.1 逐表导出格式，含"备份信息"表）
+    if (wb.SheetNames.includes('备份信息')) {
+      const parsed = await parseBackupExcelFile(file);
+      if (!parsed.success) return { kind: 'error', error: parsed.error };
+      return { kind: 'excel-legacy', data: parsed.data };
+    }
+
+    // 无备份特征（组长手工表、台账导出等）：交由调用方按台账格式处理
+    return { kind: 'other' };
+  } catch {
+    return { kind: 'error', error: 'Excel 备份文件解析失败，请确认文件未损坏' };
+  }
+}
+
+/** 统一恢复解析：.json 直接解析；.xlsx 优先读 BACKUP_JSON 隐藏表还原整库，其次回退旧版 Excel 备份 */
+export async function parseBackupFileUnified(file: File): Promise<
+  | { success: true; data: BackupData; migrated: boolean; source: BackupSourceKind }
+  | { success: false; error: string; notBackupFile?: boolean }
+> {
+  const isExcel = /\.xlsx$/i.test(file.name);
+
+  if (!isExcel) {
+    // JSON 备份恢复
+    try {
+      const raw = JSON.parse(await file.text()) as Record<string, unknown>;
+      const result = parseBackupFile(raw);
+      if (!result.success) return { success: false, error: result.error };
+      return { success: true, data: result.data, migrated: result.migrated, source: 'json' };
+    } catch {
+      return { success: false, error: '备份文件解析失败，请确认文件未损坏' };
+    }
+  }
+
+  const classified = await classifyExcelBackup(file);
+  if (classified.kind === 'excel-json') {
+    return { success: true, data: classified.data, migrated: classified.migrated, source: 'excel-json' };
+  }
+  if (classified.kind === 'excel-legacy') {
+    return { success: true, data: classified.data, migrated: false, source: 'excel-legacy' };
+  }
+  if (classified.kind === 'error') {
+    return { success: false, error: classified.error };
+  }
+  return {
+    success: false,
+    notBackupFile: true,
+    error: '非备份文件（未找到 BACKUP_JSON 隐藏表）。如为组长手工填报表格或台账导出文件，请前往「数据融合」入口导入',
+  };
+}
+
+/** 融合入口解析 xlsx：BACKUP_JSON / 旧版"备份信息"表 → 整库 BackupData；其他 → null（非备份格式，交由台账解析器） */
+export async function parseMergeExcelSource(
+  file: File
+): Promise<{ data: BackupData; source: BackupSourceKind } | null> {
+  const classified = await classifyExcelBackup(file);
+  if (classified.kind === 'excel-json') return { data: classified.data, source: 'excel-json' };
+  if (classified.kind === 'excel-legacy') return { data: classified.data, source: 'excel-legacy' };
+  return null;
 }

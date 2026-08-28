@@ -121,6 +121,21 @@ export default function Meetings() {
     const now = new Date().toISOString();
     const timeStr = `${values.timeRange[0].format('HH:mm')} - ${values.timeRange[1].format('HH:mm')}`;
 
+    // V3.4 功能6：保存会议时为每条参会记录快照当时的部门/部室
+    // 已有快照的保留原值（避免编辑旧会议时改写历史），无快照的按当前人员信息补写
+    const memberMap = new Map(members.map((m) => [m.id, m]));
+    const participants = values.participants.map((p) => {
+      if (p.isTemporary) return p;
+      if (p.departmentSnapshot !== undefined && p.titleSnapshot !== undefined) return p;
+      const m = memberMap.get(p.memberId);
+      if (!m) return p;
+      return {
+        ...p,
+        departmentSnapshot: p.departmentSnapshot ?? (m.department || '').trim(),
+        titleSnapshot: p.titleSnapshot ?? (m.title || ''),
+      };
+    });
+
     const meetingData: Omit<Meeting, 'id' | 'createdAt' | 'updatedAt'> = {
       name: (values.name || '').trim(),
       type: values.type,
@@ -133,7 +148,7 @@ export default function Meetings() {
       topic: values.topic,
       summary: '',
       resolution: values.resolution || '',
-      participants: values.participants,
+      participants,
     };
 
     if (editingMeeting) {
