@@ -110,6 +110,10 @@
   .ghost-note { font-size:12px; color:rgba(0,0,0,.35); font-style:normal; }
   .arrow-flow { display:flex; align-items:center; gap:10px; font-size:12px; color:rgba(0,0,0,.45); margin-top:10px; }
   .arrow-flow span { background:#fff; border:1px solid #f0f0f0; border-radius:6px; padding:4px 10px; }
+  .inline-row { display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+  .inline-row .il { font-size:13px; color:rgba(0,0,0,.65); flex:none; }
+  .compact-foot { display:flex; align-items:center; gap:8px; margin-top:4px; padding-top:12px; border-top:1px solid #f0f0f0; }
+  .compact-foot .kv { margin-right:auto; }
 </style>
 </head>
 <body>
@@ -142,38 +146,27 @@
         <div class="p-head"><span class="pnum">P1 · 功能 1</span><h2>设置页 · 自动备份区块</h2></div>
         <p class="p-desc">叠加在现有「数据备份」区块内，不新建页面。配置保存后由后台调度执行。</p>
         <div class="stage">
-          <div class="panel" style="width:640px;">
-            <h3>自动备份 <span class="tag t-blue">新增</span></h3>
-            <div class="form-row">
-              <div class="fi"><label>目标文件夹</label>
-                <span class="input" style="min-width:340px;">D:\党建工作台账备份<span class="sfx">浏览</span></span>
-              </div>
+          <div class="panel" style="width:640px; padding:14px 18px;">
+            <h3 style="margin-bottom:12px;">自动备份 <span class="tag t-blue">新增</span></h3>
+            <div class="inline-row">
+              <span class="il">目标文件夹</span>
+              <span class="input" style="flex:1; min-width:0;">D:\党建工作台账备份<span class="sfx">浏览</span></span>
             </div>
-            <div class="form-row">
-              <div class="fi"><label>备份频率</label>
-                <span class="input w-s">每天 08:00<span class="sfx">▾</span></span>
-              </div>
-              <div class="fi"><label>保留份数</label>
-                <span class="input w-xs">30<span class="sfx">▾</span></span>
-                <span class="ghost-note" style="align-self:center;">份，超出自动清理最旧</span>
-              </div>
+            <div class="inline-row" style="margin-bottom:0;">
+              <span class="il">频率</span>
+              <span class="input w-s">每天 08:00<span class="sfx">▾</span></span>
+              <span class="il" style="margin-left:10px;">保留</span>
+              <span class="input w-xs">30<span class="sfx">▾</span></span>
+              <span class="ghost-note">份</span>
+              <span class="il" style="margin-left:10px;">格式</span>
+              <span class="rd on"><i></i>JSON</span>
+              <span class="rd"><i></i>JSON + Excel</span>
             </div>
-            <div class="form-row">
-              <div class="fi"><label>备份格式</label>
-                <div style="display:flex; gap:18px; padding-top:5px;">
-                  <span class="rd on"><i></i>仅 JSON</span>
-                  <span class="rd"><i></i>JSON + Excel</span>
-                </div>
-              </div>
-            </div>
-            <div class="al al-info" style="margin:4px 0 14px;"><i class="ic">i</i>
-              <div>JSON 与 Excel 备份均支持整库恢复；Excel 版另含人读台账（17 列会议明细 + 人员 + 谈心谈话），恢复数据存于隐藏工作表，不影响阅读。</div>
-            </div>
-            <div class="kv">上次备份：<b>2026-08-26 20:00 成功</b>（JSON）　下次备份：<b>2026-08-27 08:00</b></div>
-            <div class="divide"></div>
-            <div style="display:flex; gap:8px;">
-              <span class="btn primary">保存设置</span>
+            <p class="hint-inline" style="margin:9px 0 0;">两种格式均可整库恢复；Excel 版另含人读台账（恢复数据存隐藏工作表）。超出保留份数自动清理最旧。</p>
+            <div class="compact-foot">
+              <span class="kv">上次备份 <b>2026-08-26 20:00 成功</b> · 下次 <b>08-27 08:00</b></span>
               <span class="btn">立即备份一次</span>
+              <span class="btn primary">保存设置</span>
             </div>
           </div>
         </div>
