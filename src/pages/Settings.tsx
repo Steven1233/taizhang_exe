@@ -745,7 +745,7 @@ export default function Settings() {
       <Divider />
 
       <div style={{ textAlign: 'center', color: '#999', fontSize: 12 }}>
-        党建工作台账应用 v3.1 | 所有数据存储在本地
+        党建工作台账应用 v{__APP_VERSION__} | 所有数据存储在本地
       </div>
 
       {/* 融合预览与冲突处理弹窗（V3.4 8a/8b：字段级冲突逐条选择 + 疑似重复提示） */}

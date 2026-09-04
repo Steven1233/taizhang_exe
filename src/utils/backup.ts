@@ -25,8 +25,8 @@ import { buildDetailSheet, appendCategorySheets } from './exportExcel';
 
 // ==================== 类型定义 ====================
 
-/** 当前应用版本 */
-export const APP_VERSION = '3.4.0';
+/** 当前应用版本（V3.5：构建时由 vite define 从 package.json 注入，单一来源） */
+export const APP_VERSION = __APP_VERSION__;
 
 /** 当前数据模式版本 */
 export const SCHEMA_VERSION = 3;

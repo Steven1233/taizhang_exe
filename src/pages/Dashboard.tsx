@@ -1,13 +1,33 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Card, Row, Col, Select, Button, Spin, Empty, Tooltip, message } from 'antd';
+import { Card, Row, Col, Select, Button, Spin, Tooltip, message } from 'antd';
 import { DownloadOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import { db, normalizeMeetingTypes, normalizeMeetingPartyGroups, normalizeMember } from '../db';
 import { addLog } from '../utils/logHelper';
 import { exportDashboardReport } from '../utils/exportWord';
 import { countActiveAttendance, membersActiveDuring, isActiveAt } from '../utils/memberStatus';
+import { buildMonthStackSeries } from '../utils/chartSeries';
 import type { Meeting, Member, TalkRecord } from '../types';
 import { MEETING_TYPES, typeMeetingUnits, meetingTotalUnits } from '../types';
+
+/** 年度无数据时的等高占位（V3.5 功能 1：居中灰字 + 图表底色，避免 ECharts 空坐标系） */
+function ChartPlaceholder({ text, height }: { text: string; height: number }) {
+  return (
+    <div
+      style={{
+        height,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: '#999',
+        fontSize: 14,
+        background: '#fafafa',
+      }}
+    >
+      {text}
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const [year, setYear] = useState(new Date().getFullYear());
@@ -63,33 +83,13 @@ export default function Dashboard() {
     });
   });
 
-  /** 该月某类型会议次数（党小组会按关联党小组数展开计次） */
-  const monthTypeCount = (monthKey: string, type: string) =>
-    yearMeetings
-      .filter((m) => m.date.substring(5, 7) === monthKey && m.type.includes(type))
-      .reduce((s, m) => s + typeMeetingUnits(m, type), 0);
   const typePieData = MEETING_TYPES.filter((t) => typeCount[t]).map((t) => ({
     name: t,
     value: typeCount[t],
   }));
 
-  // 月度会议趋势 - 堆叠数据（V3.2：党小组会系列按关联党小组数展开计次）
-  const monthStackData = MEETING_TYPES.filter((type) => {
-    // 过滤掉全年无数据的类型
-    return Array.from({ length: 12 }, (_, i) => {
-      const key = String(i + 1).padStart(2, '0');
-      return monthTypeCount(key, type);
-    }).some((v) => v > 0);
-  }).map((type) => ({
-    name: type,
-    type: 'bar' as const,
-    stack: 'total',
-    emphasis: { focus: 'series' as const },
-    data: Array.from({ length: 12 }, (_, i) => {
-      const key = String(i + 1).padStart(2, '0');
-      return monthTypeCount(key, type);
-    }),
-  }));
+  // 月度会议趋势 - 堆叠数据（V3.5 功能 1：提取为纯函数 buildMonthStackSeries，纳入自动化测试）
+  const monthStackData = buildMonthStackSeries(meetings, year);
 
   // 出勤率排行 - 降序排列，并构建详细统计
   // V3.3：时间线在职口径——行范围为"年内任一会议日期时点在职"的人员，每场会议按该场日期单独判定计入
@@ -467,18 +467,18 @@ export default function Dashboard() {
         <Col span={12}>
           <Card title="会议类型分布">
             {typePieData.length > 0 ? (
-              <ReactECharts option={pieOption} style={{ height: 350 }} />
+              <ReactECharts option={pieOption} notMerge style={{ height: 350 }} />
             ) : (
-              <Empty description="暂无数据" />
+              <ChartPlaceholder text="该年度暂无会议记录" height={350} />
             )}
           </Card>
         </Col>
         <Col span={12}>
           <Card title="月度会议趋势">
             {yearMeetings.length > 0 ? (
-              <ReactECharts option={barOption} style={{ height: 380 }} />
+              <ReactECharts option={barOption} notMerge style={{ height: 380 }} />
             ) : (
-              <Empty description="暂无数据" />
+              <ChartPlaceholder text="该年度暂无会议记录" height={380} />
             )}
           </Card>
         </Col>
@@ -507,10 +507,11 @@ export default function Dashboard() {
             {memberStats.length > 0 ? (
               <ReactECharts
                 option={rateBarOption}
+                notMerge
                 style={{ height: Math.max(300, memberStats.length * 30) }}
               />
             ) : (
-              <Empty description="暂无数据" />
+              <ChartPlaceholder text="该年度暂无出勤记录" height={300} />
             )}
           </Card>
         </Col>
@@ -538,9 +539,9 @@ export default function Dashboard() {
             }
           >
             {deptOption ? (
-              <ReactECharts option={deptOption} style={{ height: 350 }} />
+              <ReactECharts option={deptOption} notMerge style={{ height: 350 }} />
             ) : (
-              <Empty description="暂无部门数据" />
+              <ChartPlaceholder text="该年度暂无会议记录" height={350} />
             )}
           </Card>
           <Card
@@ -548,9 +549,9 @@ export default function Dashboard() {
             style={{ marginTop: 16 }}
           >
             {totalYearTalks > 0 ? (
-              <ReactECharts option={talkTrendOption} style={{ height: 320 }} />
+              <ReactECharts option={talkTrendOption} notMerge style={{ height: 320 }} />
             ) : (
-              <Empty description="暂无谈心谈话数据" />
+              <ChartPlaceholder text="该年度暂无谈心谈话记录" height={320} />
             )}
           </Card>
         </Col>

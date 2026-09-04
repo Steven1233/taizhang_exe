@@ -467,22 +467,40 @@ async function initAutoBackup() {
   }, AUTO_BACKUP_POLL_MS);
 }
 
-app.whenReady().then(createWindow);
+// ==================== 单实例锁（V3.5 功能 3） ====================
+// 防多开：多个实例并发读写同一 IndexedDB 会引发数据库锁冲突甚至库文件损坏，
+// 自动备份调度器也会多实例并发触发。第二实例静默退出；已开实例被再次启动时聚焦主窗口。
 
-app.on('window-all-closed', () => {
-  stopAutoBackupScheduler();
-  if (autoBackupPollTimer) {
-    clearInterval(autoBackupPollTimer);
-    autoBackupPollTimer = null;
-  }
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  // 第二实例：静默退出（不弹框、不打扰——用户双击 exe 的意图是"把应用调出来"）
   app.quit();
-});
+} else {
+  // 已开实例收到再次启动请求：聚焦主窗口（最小化则还原）
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  }
-});
+  app.whenReady().then(createWindow);
+
+  app.on('window-all-closed', () => {
+    stopAutoBackupScheduler();
+    if (autoBackupPollTimer) {
+      clearInterval(autoBackupPollTimer);
+      autoBackupPollTimer = null;
+    }
+    app.quit();
+  });
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
+  });
+}
 
 // 捕获未处理的异常，避免静默崩溃
 process.on('uncaughtException', (err) => {
