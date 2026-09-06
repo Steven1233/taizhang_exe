@@ -123,6 +123,19 @@ function testSingleInstanceLock() {
   check('窗口生命周期仍由持锁实例管理（whenReady 在 else 分支内）', /else \{[\s\S]*?app\.whenReady\(\)\.then\(createWindow\);/.test(mainCjs), true);
 }
 
+// ==================== [4] 年份选择器数据驱动（V3.5.1 修复） ====================
+
+function testYearOptionsDataDriven() {
+  console.log('\n[9] Dashboard 年份选项数据驱动（修复：固定窗口选不到数据中的未来年份，如 2031）');
+  const dash = readProjectFile('src/pages/Dashboard.tsx');
+  check('无固定 10 项年份窗口（getFullYear() - 5 硬编码已移除）', dash.includes('getFullYear() - 5'), false);
+  check('会议日期参与选项构造（meetings.map((m) => m.date)）', dash.includes('meetings.map((m) => m.date)'), true);
+  check('谈心谈话日期参与选项构造（talks.map((t) => t.talkDate)）', dash.includes('talks.map((t) => t.talkDate)'), true);
+  check('保留默认窗口（当前年 -5 ～ +4 前瞻）', dash.includes('i <= 4') && dash.includes('i = -5'), true);
+  check('脏日期防御（Number.isInteger + 年份下限 1900）', dash.includes('Number.isInteger(y) && y >= 1900'), true);
+  check('Select 选项改用 yearOptions', dash.includes('options={yearOptions}'), true);
+}
+
 // ==================== 主流程 ====================
 
 async function main() {
@@ -130,6 +143,7 @@ async function main() {
   testBuildMonthStackSeries();
   testVersionSingleSource();
   testSingleInstanceLock();
+  testYearOptionsDataDriven();
 
   console.log('\n========== 结果 ==========');
   console.log(`通过: ${pass}，失败: ${fail}`);

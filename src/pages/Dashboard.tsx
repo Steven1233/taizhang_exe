@@ -54,6 +54,17 @@ export default function Dashboard() {
     loadData();
   }, [loadData]);
 
+  const currentYear = new Date().getFullYear();
+  const yearSet = new Set<number>();
+  for (let i = -5; i <= 4; i++) yearSet.add(currentYear + i);
+  for (const dateStr of meetings.map((m) => m.date).concat(talks.map((t) => t.talkDate))) {
+    const y = Number(dateStr.substring(0, 4));
+    if (Number.isInteger(y) && y >= 1900) yearSet.add(y);
+  }
+  const yearOptions = Array.from(yearSet)
+    .sort((a, b) => a - b)
+    .map((y) => ({ label: `${y}年`, value: y }));
+
   const yearMeetings = meetings.filter((m) => m.date.startsWith(String(year)));
   const activeMembers = members.filter((m) => m.status === 'active');
 
@@ -403,10 +414,7 @@ export default function Dashboard() {
             value={year}
             onChange={setYear}
             style={{ width: 100 }}
-            options={Array.from({ length: 10 }, (_, i) => ({
-              label: `${new Date().getFullYear() - 5 + i}年`,
-              value: new Date().getFullYear() - 5 + i,
-            }))}
+            options={yearOptions}
           />
         </div>
         <Button
