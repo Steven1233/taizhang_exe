@@ -95,8 +95,8 @@ function testBuildMonthStackSeries() {
 function testVersionSingleSource() {
   console.log('\n[6] 版本号单一来源：注入值 = package.json');
   const pkg = JSON.parse(readProjectFile('package.json'));
-  check('package.json version = 3.5.0', pkg.version, '3.5.0');
-  check('backup.ts APP_VERSION = 注入值（3.5.0）', APP_VERSION, '3.5.0');
+  check('package.json version 为合法 semver', /^\d+\.\d+\.\d+$/.test(pkg.version), true);
+  check('backup.ts APP_VERSION = 注入值', APP_VERSION, pkg.version);
   check('APP_VERSION 与 package.json 一致', APP_VERSION, pkg.version);
 
   console.log('\n[7] 源码静态校验：注入链路各环节到位、无残留硬编码');
