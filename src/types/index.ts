@@ -188,6 +188,8 @@ export interface Participant {
   // 统计与导出优先读快照（人员换部门不改写历史），旧数据无快照回退当前值
   departmentSnapshot?: string;  // 保存时的部门/支部
   titleSnapshot?: string;       // 保存时的部室
+  // V3.5.2：保存时的党小组（数据看板「出勤对比」党小组维度统计用，口径同上）
+  partyGroupSnapshot?: string;
 }
 
 // 会议记录

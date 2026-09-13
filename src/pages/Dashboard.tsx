@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Card, Row, Col, Select, Button, Spin, Tooltip, message } from 'antd';
+import { Card, Row, Col, Select, Button, Spin, Tooltip, message, Segmented } from 'antd';
 import { DownloadOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import { db, normalizeMeetingTypes, normalizeMeetingPartyGroups, normalizeMember } from '../db';
 import { addLog } from '../utils/logHelper';
 import { exportDashboardReport } from '../utils/exportWord';
-import { countActiveAttendance, membersActiveDuring, isActiveAt } from '../utils/memberStatus';
-import { buildMonthStackSeries } from '../utils/chartSeries';
+import { countActiveAttendance, membersActiveDuring, isActiveAt, countActiveMembersAt } from '../utils/memberStatus';
+import { buildMonthStackSeries, buildDimensionAttendanceRates, type AttendanceDimension } from '../utils/chartSeries';
 import type { Meeting, Member, TalkRecord } from '../types';
 import { MEETING_TYPES, typeMeetingUnits, meetingTotalUnits } from '../types';
 
@@ -36,6 +36,8 @@ export default function Dashboard() {
   const [talks, setTalks] = useState<TalkRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+  // V3.5.2：出勤对比维度（默认党小组，切换年份时保持）
+  const [dim, setDim] = useState<AttendanceDimension>('partyGroup');
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -66,7 +68,13 @@ export default function Dashboard() {
     .map((y) => ({ label: `${y}年`, value: y }));
 
   const yearMeetings = meetings.filter((m) => m.date.startsWith(String(year)));
-  const activeMembers = members.filter((m) => m.status === 'active');
+
+  // V3.5.2：在职党员总数按所选年份时点统计（过去/未来年份=年末，当前年份=截至目前）
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const activeRefDate = year === currentYear ? todayStr : `${year}-12-31`;
+  const activeMembersCount = countActiveMembersAt(members, activeRefDate);
+  const activeLabel = year === currentYear ? '截至目前' : `${year}年末`;
 
   // 关键指标（V3.3：会议总数按套会拆开计入 = 各类型计次单位之和）
   const totalMeetings = yearMeetings.reduce((s, m) => s + meetingTotalUnits(m), 0);
@@ -133,35 +141,13 @@ export default function Dashboard() {
     })
     .sort((a, b) => b.rate - a.rate);
 
-  // 部门出勤率 - 排除支委会会议（V3.3：时间线在职口径，行范围与逐场判定同步）
-  // V3.4 功能6：按会议时点部门统计——每条考勤计入开会当天所属部门（优先读参会记录快照，
-  // 人员换部门不改写历史），旧数据无快照回退当前部门
-  const deptRates: Record<string, { total: number; attended: number }> = {};
-  membersActiveDuring(members, yearMeetings).forEach((member) => {
-    // 当前部门（参会记录无快照时的回退值）
-    const currentDept = Array.isArray(member.department)
-      ? member.department.filter(Boolean).join('、')
-      : (member.department || '').trim();
-    yearMeetings.forEach((m) => {
-      // 支委会不计入部门出勤
-      if (m.type.includes('支部委员会')) return;
-      if (!isActiveAt(member, m.date)) return; // 离开期间不计入
-      const p = m.participants.find((pt) => pt.memberId === member.id);
-      if (p) {
-        const dept = p.departmentSnapshot !== undefined ? p.departmentSnapshot.trim() : currentDept;
-        if (!dept) return; // 无部门可归属
-        if (!deptRates[dept]) {
-          deptRates[dept] = { total: 0, attended: 0 };
-        }
-        deptRates[dept].total++;
-        if (p.status === 'attended') deptRates[dept].attended++;
-      }
-    });
-  });
-  const deptChartData = Object.entries(deptRates).map(([dept, data]) => ({
-    name: dept,
-    rate: data.total > 0 ? (data.attended / data.total) * 100 : 0,
-  }));
+  // 出勤对比（V3.5.2：三维度统计——党小组/部室/部门支部，纯函数化，口径见 chartSeries.ts）
+  const dimRates = buildDimensionAttendanceRates(yearMeetings, members, dim);
+  const dimMeta: Record<AttendanceDimension, { label: string; snapLabel: string }> = {
+    partyGroup: { label: '党小组', snapLabel: '党小组' },
+    title: { label: '部室', snapLabel: '部室' },
+    department: { label: '部门/支部', snapLabel: '部门' },
+  };
 
   // 月度谈心谈话趋势（V3.0 新增）
   const yearTalks = talks.filter((t) => t.talkDate.startsWith(String(year)));
@@ -224,7 +210,7 @@ export default function Dashboard() {
     const stats = {
       totalMeetings,
       avgAttendance: parseFloat(avgRate.toFixed(1)),
-      activeMembers: activeMembers.length,
+      activeMembers: activeMembersCount,
       monthMeetings,
     };
     const typeStats = typePieData.map((d) => ({ name: d.name, value: d.value }));
@@ -345,21 +331,29 @@ export default function Dashboard() {
     ],
   };
 
-  const deptOption =
-    deptChartData.length > 0
+  const dimOption =
+    dimRates.length > 0
       ? {
           tooltip: {
             trigger: 'axis' as const,
             formatter: (params: any) => {
               if (!params || params.length === 0) return '';
               const data = params[0];
-              return `${data.name}<br/>部门出勤率：${data.value}%<br/><span style="color:#999;font-size:12px;">注：不含支委会出勤数据</span>`;
+              const stat = dimRates[data.dataIndex];
+              if (!stat) return '';
+              return `
+                <strong>${data.name}</strong><br/>
+                出席：${stat.attended}人次 / 应到：${stat.total}人次<br/>
+                ${dimMeta[dim].label}出勤率：${data.value}%<br/>
+                <span style="color:#999;font-size:12px;">注：不含支委会出勤数据；未${dim === 'partyGroup' ? '编组' : dim === 'title' ? '填写部室' : '填写部门'}人员不计入</span>
+              `;
             },
           },
           grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
           xAxis: {
             type: 'category' as const,
-            data: deptChartData.map((d) => d.name),
+            data: dimRates.map((d) => d.name),
+            axisLabel: { interval: 0, rotate: dimRates.length > 8 ? 30 : 0 },
           },
           yAxis: {
             type: 'value' as const,
@@ -369,7 +363,7 @@ export default function Dashboard() {
           series: [
             {
               type: 'bar',
-              data: deptChartData.map((d) => parseFloat(d.rate.toFixed(1))),
+              data: dimRates.map((d) => parseFloat(d.rate.toFixed(1))),
               itemStyle: { color: '#CC0000' },
               label: { show: true, position: 'top', formatter: '{c}%' },
             },
@@ -458,8 +452,23 @@ export default function Dashboard() {
         </Col>
         <Col span={6}>
           <Card className="stat-card">
-            <div className="stat-value">{activeMembers.length}</div>
-            <div className="stat-label">在职党员总数</div>
+            <div className="stat-value">{activeMembersCount}</div>
+            <div className="stat-label">
+              在职党员总数（{activeLabel}）
+              <Tooltip
+                title={
+                  <div>
+                    <div>计算方法：</div>
+                    <div>统计参考时点状态为在职的党员人数（{activeLabel}）</div>
+                    <div style={{ marginTop: 4 }}>· 过去/未来年份取该年 12 月 31 日时点，当前年份取截至目前</div>
+                    <div>· 按状态历史时间线追溯：借调/调离/离职期间不计入，借调回归后恢复计入</div>
+                    <div>· 该年份尚未入职（组织关系未转入）的人员不计入</div>
+                  </div>
+                }
+              >
+                <QuestionCircleOutlined style={{ marginLeft: 6, color: '#999', cursor: 'help' }} />
+              </Tooltip>
+            </div>
           </Card>
         </Col>
         <Col span={6}>
@@ -526,28 +535,41 @@ export default function Dashboard() {
         <Col span={12}>
           <Card
             title={
-              <span>
-                部门出勤对比（按会议时点部门统计）
-                <Tooltip
-                  title={
-                    <div>
-                      <div>计算方式：</div>
-                      <div>部门出勤率 = 该部门人员出席次数 / 该部门人员应参会次数 × 100%</div>
-                      <div style={{ marginTop: 4 }}>· 按会议时点部门统计：每条考勤计入开会当天所属部门，人员换部门不改写历史</div>
-                      <div>· 旧数据无部门快照时按当前部门统计</div>
-                      <div style={{ marginTop: 4, color: '#faad14' }}>
-                        注意：支委会仅统计有支委职务的人员，不纳入部门单独出勤计算。
+              <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>
+                  {dimMeta[dim].label}出勤对比（按会议时点统计）
+                  <Tooltip
+                    title={
+                      <div>
+                        <div>计算方式：</div>
+                        <div>{dimMeta[dim].label}出勤率 = 该{dimMeta[dim].snapLabel}人员出席人次 / 应到人次 × 100%</div>
+                        <div style={{ marginTop: 4 }}>· 按会议时点{dimMeta[dim].snapLabel}统计：每条考勤计入开会当天所属{dimMeta[dim].snapLabel}，人员更换后不改写历史</div>
+                        <div>· 旧数据无快照时按当前{dimMeta[dim].snapLabel}统计</div>
+                        <div>· 未{dim === 'partyGroup' ? '编组' : '填写' + dimMeta[dim].snapLabel}人员不计入</div>
+                        <div style={{ marginTop: 4, color: '#faad14' }}>
+                          注意：支委会仅统计有支委职务的人员，不纳入{dimMeta[dim].snapLabel}单独出勤计算。
+                        </div>
                       </div>
-                    </div>
-                  }
-                >
-                  <QuestionCircleOutlined style={{ marginLeft: 6, color: '#999', cursor: 'help' }} />
-                </Tooltip>
+                    }
+                  >
+                    <QuestionCircleOutlined style={{ marginLeft: 6, color: '#999', cursor: 'help' }} />
+                  </Tooltip>
+                </span>
+                <Segmented
+                  size="small"
+                  value={dim}
+                  onChange={(v) => setDim(v as AttendanceDimension)}
+                  options={[
+                    { label: '党小组', value: 'partyGroup' },
+                    { label: '部室', value: 'title' },
+                    { label: '部门/支部', value: 'department' },
+                  ]}
+                />
               </span>
             }
           >
-            {deptOption ? (
-              <ReactECharts option={deptOption} notMerge style={{ height: 350 }} />
+            {dimOption ? (
+              <ReactECharts option={dimOption} notMerge style={{ height: 350 }} />
             ) : (
               <ChartPlaceholder text="该年度暂无会议记录" height={350} />
             )}

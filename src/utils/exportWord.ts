@@ -150,6 +150,8 @@ export async function exportDashboardReport(
   });
 
   // === 一、概览统计 ===
+  // V3.5.2：「在职党员」指标按所选年份时点统计（过去/未来年份=年末，当前年份=截至目前）
+  const activeLabel = year === new Date().getFullYear() ? '在职党员（截至目前）' : `在职党员（${year}年末）`;
   const overviewTable = new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
     rows: [
@@ -157,7 +159,7 @@ export async function exportDashboardReport(
         children: [
           createCell('会议总数', { bold: true, color: 'FFFFFF', bg: HEADER_BG, fontSize: 22 }),
           createCell('平均出勤率', { bold: true, color: 'FFFFFF', bg: HEADER_BG, fontSize: 22 }),
-          createCell('在职党员', { bold: true, color: 'FFFFFF', bg: HEADER_BG, fontSize: 22 }),
+          createCell(activeLabel, { bold: true, color: 'FFFFFF', bg: HEADER_BG, fontSize: 22 }),
           createCell('本月会议', { bold: true, color: 'FFFFFF', bg: HEADER_BG, fontSize: 22 }),
         ],
       }),

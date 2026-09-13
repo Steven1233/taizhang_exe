@@ -57,6 +57,26 @@ export function membersActiveDuring(members: Member[], meetings: Meeting[]): Mem
 }
 
 /**
+ * 统计参考时点在职的党员数（V3.5.2：数据看板「在职党员总数」年度口径）
+ *
+ * 口径（年报口径）：
+ * - 入库时点：首条状态记录日期（无状态历史时取创建日期）不晚于参考时点，
+ *   该时点尚未入职/组织关系未转入的人员不计入
+ * - 状态追溯：isActiveAt 时间线判定（借调期间不计入，回归后恢复，调离/离职后不计入）
+ * - 无状态历史的旧数据按当前状态兜底（与 isActiveAt 一致）
+ */
+export function countActiveMembersAt(members: Member[], refDate: string): number {
+  return members.filter((m) => {
+    const history = m.statusHistory && m.statusHistory.length > 0
+      ? [...m.statusHistory].sort((a, b) => a.date.localeCompare(b.date))
+      : null;
+    const entryDate = history ? history[0].date : (m.createdAt || '').substring(0, 10);
+    if (entryDate && entryDate > refDate) return false; // 参考时点尚未入库
+    return isActiveAt(m, refDate);
+  }).length;
+}
+
+/**
  * 追加状态变更记录（若状态未变化则不追加）
  *
  * V3.4 修复：去重基准由"数组末位"改为"变更日期时点的既有状态"——

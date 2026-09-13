@@ -476,11 +476,13 @@ export default function MeetingForm({ open, editingMeeting, onOk, onCancel }: Me
     });
     setParticipants(
       // V3.4 功能6：复用记录时清除原有快照，保存时按当前部门/部室重新快照
+      // V3.5.2：同步清除党小组快照
       last.participants.map((p) => {
-        if (p.departmentSnapshot === undefined && p.titleSnapshot === undefined) return p;
+        if (p.departmentSnapshot === undefined && p.titleSnapshot === undefined && p.partyGroupSnapshot === undefined) return p;
         const copy = { ...p };
         delete copy.departmentSnapshot;
         delete copy.titleSnapshot;
+        delete copy.partyGroupSnapshot;
         return copy;
       })
     );

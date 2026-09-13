@@ -1,7 +1,8 @@
 /**
  * V3.5 数据驱动验证脚本
  * 覆盖：月度趋势系列纯函数（空白年份→空数组 / 各类型计次 / 套会拆分 / 年份过滤 / 无数据类型剔除）、
- *       版本号单一来源（package.json ↔ vite define 注入 ↔ Settings/backup）、单实例锁静态结构校验
+ *       版本号单一来源（package.json ↔ vite define 注入 ↔ Settings/backup）、单实例锁静态结构校验、
+ *       V3.5.1 年份选择器数据驱动、V3.5.2 在职党员年度时点计数 + 出勤对比三维度统计
  * 运行：V=$(node -p "JSON.stringify(require('./package.json').version)") && \
  *       npx esbuild scripts/v35-test.ts --bundle --platform=node --format=cjs \
  *         --define:__APP_VERSION__="$V" --outfile=/tmp/v35-test.cjs && node /tmp/v35-test.cjs
@@ -11,8 +12,9 @@
 import 'fake-indexeddb/auto';
 import fs from 'fs';
 import path from 'path';
-import type { Meeting } from '../src/types';
-import { buildMonthStackSeries } from '../src/utils/chartSeries';
+import type { Meeting, Member } from '../src/types';
+import { buildMonthStackSeries, buildDimensionAttendanceRates } from '../src/utils/chartSeries';
+import { countActiveMembersAt } from '../src/utils/memberStatus';
 import { APP_VERSION } from '../src/utils/backup';
 
 // ==================== 断言工具 ====================
@@ -35,6 +37,13 @@ const mkMeeting = (over: Partial<Meeting> & { id: string; date: string }): Meeti
   name: '', type: ['党课'], partyGroups: [], time: '09:00 - 10:00', location: '党员活动室',
   host: '张三', recorder: '李四', topic: '测试议题', summary: '', resolution: '',
   participants: [], createdAt: '2025-01-01T00:00:00', updatedAt: '2025-01-01T00:00:00',
+  ...over,
+});
+
+const mkMember = (over: Partial<Member> & { id: string; name: string }): Member => ({
+  title: '', department: '', phone: '', status: 'active', partyGroup: '', isGroupLeader: false,
+  committeeRole: '', createdAt: '2024-01-15T00:00:00', updatedAt: '2024-01-15T00:00:00',
+  statusHistory: [{ status: 'active', date: '2024-01-15' }],
   ...over,
 });
 
@@ -136,6 +145,148 @@ function testYearOptionsDataDriven() {
   check('Select 选项改用 yearOptions', dash.includes('options={yearOptions}'), true);
 }
 
+// ==================== [5] 在职党员年度时点计数（V3.5.2 功能 1） ====================
+
+function testCountActiveMembersAt() {
+  console.log('\n[10] countActiveMembersAt：年度时点在职计数（年末口径 + 入库时点判定）');
+  const members: Member[] = [
+    mkMember({ id: 'm1', name: '张三' }),  // 创始在职
+    mkMember({ id: 'm2', name: '李四', statusHistory: [{ status: 'active', date: '2025-01-06' }], createdAt: '2025-01-06T00:00:00' }),  // 中途入职
+    mkMember({ id: 'm3', name: '王五', status: 'transferred', statusHistory: [{ status: 'active', date: '2024-01-15' }, { status: 'transferred', date: '2024-11-20' }] }),
+    mkMember({ id: 'm4', name: '赵六', statusHistory: [{ status: 'active', date: '2024-01-15' }, { status: 'seconded', date: '2025-03-10' }, { status: 'active', date: '2025-09-01' }] }),  // 借调回归
+    mkMember({ id: 'm5', name: '钱七', statusHistory: [{ status: 'active', date: '2024-01-15' }, { status: 'resigned', date: '2026-01-20' }] }),
+    mkMember({ id: 'm6', name: '孙八', status: 'transferred', statusHistory: [{ status: 'transferred', date: '2024-06-01' }] }),  // 入库即调离
+    mkMember({ id: 'm7', name: '周九', status: 'active', statusHistory: undefined }),  // 无状态历史
+  ];
+
+  check('2024-12-31 = 4（李四未入职、王五已调离、孙八入库即调离均不计）', countActiveMembersAt(members, '2024-12-31'), 4);
+  check('2025-06-30 = 4（李四已入职、赵六借调期间不计）', countActiveMembersAt(members, '2025-06-30'), 4);
+  check('2025-12-31 = 5（赵六借调回归恢复计入）', countActiveMembersAt(members, '2025-12-31'), 5);
+  check('2026-12-31 = 4（钱七已离职）', countActiveMembersAt(members, '2026-12-31'), 4);
+  check('早于全员入库日期 → 0', countActiveMembersAt(members, '2024-01-01'), 0);
+  check('入库即调离：入库当日即调离不计', countActiveMembersAt([members[5]], '2024-06-01'), 0);
+  check('无状态历史按当前状态兜底（在职计 1）', countActiveMembersAt([members[6]], '2025-01-01'), 1);
+  check('无状态历史 + 创建日期晚于参考时点不计', countActiveMembersAt([{ ...members[6], createdAt: '2025-06-02T00:00:00' }], '2025-01-01'), 0);
+
+  console.log('\n[11] countActiveMembersAt：测试数据备份集成校验（46 人名单）');
+  let backup: { tables: { members: { data: Member[] } } };
+  try {
+    backup = JSON.parse(readProjectFile('党建工作台账_测试数据备份.json'));
+  } catch {
+    check('测试数据备份文件存在且可解析', false, true);
+    return;
+  }
+  const roster = backup.tables.members.data;
+  check('备份人员 46 名', roster.length, 46);
+  check('2024 年末在职 41 人（5 人不计：3 未入职 + 2 已调离）', countActiveMembersAt(roster, '2024-12-31'), 41);
+  check('2025 年末在职 41 人（4 调离/离职 + 1 未入职不计）', countActiveMembersAt(roster, '2025-12-31'), 41);
+  check('2026 年末在职 40 人（6 调离/借调/离职不计）', countActiveMembersAt(roster, '2026-12-31'), 40);
+  check('2031 年末在职 40 人（无更晚状态变更，按最后已知状态）', countActiveMembersAt(roster, '2031-12-31'), 40);
+}
+
+// ==================== [6] 出勤对比三维度统计（V3.5.2 功能 2） ====================
+
+function testBuildDimensionAttendanceRates() {
+  console.log('\n[12] buildDimensionAttendanceRates：基础聚合与排序');
+  const m1 = mkMember({ id: 'p1', name: '张三', department: '综合管理部', title: '综合科', partyGroup: '第一党小组' });
+  const m2 = mkMember({ id: 'p2', name: '李四', department: '综合管理部', title: '综合科', partyGroup: '第一党小组' });
+  const m3 = mkMember({ id: 'p3', name: '王五', department: '财务部', title: '会计科', partyGroup: '第二党小组' });
+  const meeting1 = mkMeeting({
+    id: 't1', date: '2025-05-10', type: ['党课'],
+    participants: [
+      { memberId: 'p1', name: '张三', status: 'attended', isTemporary: false },
+      { memberId: 'p2', name: '李四', status: 'leave', isTemporary: false, leaveReason: '出差' },
+      { memberId: 'p3', name: '王五', status: 'attended', isTemporary: false },
+    ],
+  });
+
+  const dept = buildDimensionAttendanceRates([meeting1], [m1, m2, m3], 'department');
+  check('部门维度 2 个类目，按出勤率降序', dept.map((d) => d.name), ['财务部', '综合管理部']);
+  check('财务部 100%（出席1/应到1）', dept[0], { name: '财务部', attended: 1, total: 1, rate: 100 });
+  check('综合管理部 50%（出席1/应到2，请假计未出席）', dept[1], { name: '综合管理部', attended: 1, total: 2, rate: 50 });
+
+  const title = buildDimensionAttendanceRates([meeting1], [m1, m2, m3], 'title');
+  check('部室维度：会计科 100%、综合科 50%', title, [
+    { name: '会计科', attended: 1, total: 1, rate: 100 },
+    { name: '综合科', attended: 1, total: 2, rate: 50 },
+  ]);
+
+  console.log('\n[13] buildDimensionAttendanceRates：快照优先与回退');
+  const moved = mkMember({ id: 'p1', name: '张三', partyGroup: '第二党小组', department: '市场部' });  // 当前已从一组/综合管理部调出
+  const snapMeeting = mkMeeting({
+    id: 't2', date: '2025-05-10', type: ['党小组会'],
+    participants: [{ memberId: 'p1', name: '张三', status: 'attended', isTemporary: false, partyGroupSnapshot: '第一党小组', departmentSnapshot: '综合管理部' }],
+  });
+  check('党小组快照优先（计入第一党小组而非当前第二党小组）', buildDimensionAttendanceRates([snapMeeting], [moved], 'partyGroup').map((d) => d.name), ['第一党小组']);
+  check('部门快照优先（计入综合管理部而非当前市场部）', buildDimensionAttendanceRates([snapMeeting], [moved], 'department').map((d) => d.name), ['综合管理部']);
+
+  const legacyMeeting = mkMeeting({
+    id: 't3', date: '2025-05-10', type: ['党小组会'],
+    participants: [{ memberId: 'p1', name: '张三', status: 'attended', isTemporary: false }],  // 旧数据无快照
+  });
+  check('旧数据无快照回退当前党小组', buildDimensionAttendanceRates([legacyMeeting], [moved], 'partyGroup').map((d) => d.name), ['第二党小组']);
+
+  console.log('\n[14] buildDimensionAttendanceRates：口径排除规则');
+  const noGroup = mkMember({ id: 'p4', name: '赵六', department: '法务部', partyGroup: '' });
+  const noGroupMeeting = mkMeeting({
+    id: 't4', date: '2025-05-10', type: ['党课'],
+    participants: [{ memberId: 'p4', name: '赵六', status: 'attended', isTemporary: false }],
+  });
+  check('未编组人员不计入党小组维度', buildDimensionAttendanceRates([noGroupMeeting], [noGroup], 'partyGroup'), []);
+  check('未编组人员计入部门维度（法务部）', buildDimensionAttendanceRates([noGroupMeeting], [noGroup], 'department').map((d) => d.name), ['法务部']);
+
+  const committeeMeeting = mkMeeting({
+    id: 't5', date: '2025-05-10', type: ['支部委员会'],
+    participants: [{ memberId: 'p1', name: '张三', status: 'attended', isTemporary: false }],
+  });
+  check('支委会不计入维度出勤', buildDimensionAttendanceRates([committeeMeeting], [m1], 'department'), []);
+  const suiteMeeting = mkMeeting({
+    id: 't6', date: '2025-05-10', type: ['支部党员大会', '支部委员会'],
+    participants: [{ memberId: 'p1', name: '张三', status: 'attended', isTemporary: false }],
+  });
+  check('套会含支委会整条不计入', buildDimensionAttendanceRates([suiteMeeting], [m1], 'department'), []);
+
+  const secondedM = mkMember({ id: 'p5', name: '钱七', department: '审计部', statusHistory: [{ status: 'active', date: '2024-01-15' }, { status: 'seconded', date: '2025-01-01' }] });
+  const secondedMeeting = mkMeeting({
+    id: 't7', date: '2025-06-01', type: ['党课'],
+    participants: [{ memberId: 'p5', name: '钱七', status: 'attended', isTemporary: false }],
+  });
+  check('借调期间不计入', buildDimensionAttendanceRates([secondedMeeting], [secondedM], 'department'), []);
+
+  const guestMeeting = mkMeeting({
+    id: 't8', date: '2025-05-10', type: ['党课'],
+    participants: [{ memberId: 'p1', name: '张三', status: 'attended', isTemporary: false, isGuest: true }],
+  });
+  check('列席计入出席', buildDimensionAttendanceRates([guestMeeting], [m1], 'department')[0].attended, 1);
+
+  const tempMeeting = mkMeeting({
+    id: 't9', date: '2025-05-10', type: ['党课'],
+    participants: [{ memberId: 'temp_abc123', name: '外单位王林', status: 'attended', isTemporary: true }],
+  });
+  check('临时人员不计入', buildDimensionAttendanceRates([tempMeeting], [m1], 'department'), []);
+  check('无会议 → 空数组', buildDimensionAttendanceRates([], [m1], 'partyGroup'), []);
+}
+
+// ==================== [7] V3.5.2 静态结构校验 ====================
+
+function testV352Static() {
+  console.log('\n[15] V3.5.2 静态结构校验（Dashboard 口径 / 快照链路 / Word 标签）');
+  const dash = readProjectFile('src/pages/Dashboard.tsx');
+  check('在职党员总数使用 countActiveMembersAt', dash.includes('countActiveMembersAt(members, activeRefDate)'), true);
+  check('参考时点：当前年=当天、其他年=年末', dash.includes('year === currentYear ? todayStr : `${year}-12-31`'), true);
+  check('维度状态默认党小组', dash.includes("useState<AttendanceDimension>('partyGroup')"), true);
+  check('出勤对比调用 buildDimensionAttendanceRates', dash.includes('buildDimensionAttendanceRates(yearMeetings, members, dim)'), true);
+  check('Segmented 三维度切换项', dash.includes("{ label: '党小组', value: 'partyGroup' }") && dash.includes("{ label: '部室', value: 'title' }") && dash.includes("{ label: '部门/支部', value: 'department' }"), true);
+  check('旧部门统计实现已移除（deptChartData 无残留）', dash.includes('deptChartData'), false);
+
+  const meetingsPage = readProjectFile('src/pages/Meetings.tsx');
+  check('保存会议时写党小组快照', meetingsPage.includes('partyGroupSnapshot: p.partyGroupSnapshot ?? (m.partyGroup || \'\')'), true);
+  const form = readProjectFile('src/components/MeetingForm.tsx');
+  check('复用记录时清除党小组快照', form.includes('delete copy.partyGroupSnapshot'), true);
+  const word = readProjectFile('src/utils/exportWord.ts');
+  check('Word 报告「在职党员」标签带年度时点', word.includes('在职党员（${year}年末）'), true);
+}
+
 // ==================== 主流程 ====================
 
 async function main() {
@@ -144,6 +295,9 @@ async function main() {
   testVersionSingleSource();
   testSingleInstanceLock();
   testYearOptionsDataDriven();
+  testCountActiveMembersAt();
+  testBuildDimensionAttendanceRates();
+  testV352Static();
 
   console.log('\n========== 结果 ==========');
   console.log(`通过: ${pass}，失败: ${fail}`);
