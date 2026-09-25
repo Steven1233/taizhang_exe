@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>V3.5.3 原型 · 数据看板「组织架构」</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: #f0f2f5; color: rgba(0, 0, 0, 0.88);
+    padding: 36px 20px 60px;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+
+  /* ===== 页头 ===== */
+  .proto-head { margin-bottom: 20px; }
+  .proto-head h1 { font-size: 20px; font-weight: 600; margin-bottom: 6px; }
+  .proto-head p { font-size: 13px; color: #8c8c8c; line-height: 1.8; }
+
+  /* ===== 位置示意 ===== */
+  .position-hint {
+    border: 1px dashed #d9d9d9; background: #fafafa; color: #8c8c8c;
+    font-size: 12px; text-align: center; padding: 14px 12px; border-radius: 8px;
+    margin-bottom: 16px; line-height: 1.9;
+  }
+
+  /* ===== 卡片 ===== */
+  .card {
+    background: #fff; border-radius: 10px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), 0 2px 8px rgba(0, 0, 0, 0.04);
+    padding: 20px 24px 22px;
+  }
+  .card-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding-bottom: 14px; border-bottom: 1px solid #f0f0f0; margin-bottom: 6px; flex-wrap: wrap;
+  }
+  .card-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .card-title .t { font-size: 16px; font-weight: 600; }
+  .card-title .sub { font-size: 12px; color: #8c8c8c; }
+  .help {
+    width: 15px; height: 15px; border-radius: 50%; background: #f0f0f0; color: #8c8c8c;
+    font-size: 11px; display: inline-flex; align-items: center; justify-content: center;
+    cursor: help; flex: none;
+  }
+  .btn-all {
+    border: 1px solid #CC0000; color: #CC0000; background: #fff;
+    border-radius: 6px; padding: 4px 14px; font-size: 13px; cursor: pointer;
+  }
+  .btn-all:hover { background: #fff1f0; }
+
+  /* ===== 组织架构树 ===== */
+  .org { --line: #d9a6a6; --red: #CC0000; padding: 14px 8px 4px; }
+  .drop { width: 2px; height: 26px; background: var(--line); margin: 0 auto; }
+  .spine { display: flex; flex-direction: column; align-items: center; }
+
+  .node { background: #fff; border-radius: 8px; text-align: center; }
+  .node .role { font-size: 12px; letter-spacing: 2px; color: #8c8c8c; }
+  .node .name { font-size: 15px; font-weight: 600; margin-top: 3px; letter-spacing: 2px; }
+  .node-sec {
+    border: 1.5px solid var(--red); padding: 10px 34px; min-width: 132px;
+    box-shadow: 0 2px 10px rgba(204, 0, 0, 0.10);
+  }
+  .node-sec .role { color: var(--red); font-weight: 500; }
+  .node-sec .name { font-size: 16px; }
+  .node-com {
+    border: 1px solid #ecc2c2; padding: 9px 22px; min-width: 100px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
+  }
+
+  /* 扇形层级：横向排列 + 连接线（左半轨 / 右半轨 + 中央下垂线） */
+  .fan { display: flex; justify-content: center; align-items: flex-start; list-style: none; }
+  .fan > li {
+    position: relative; padding: 26px 11px 0;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  .fan > li::before {
+    content: ''; position: absolute; top: 0; left: 0; width: 50%; height: 26px;
+    border-top: 2px solid var(--line);
+  }
+  .fan > li::after {
+    content: ''; position: absolute; top: 0; right: 0; width: 50%; height: 26px;
+    border-top: 2px solid var(--line); border-left: 2px solid var(--line);
+  }
+  .fan > li:first-child::before { display: none; }
+  .fan > li:last-child::after { border-top: none; }
+  .fan > li:only-child::after { border-top: none; }
+
+  /* ===== 党小组卡片 ===== */
+  .group-card {
+    background: #fff; border: 1px solid #f0c9c9; border-radius: 8px;
+    min-width: 186px; overflow: hidden; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
+  }
+  .group-head {
+    display: flex; align-items: center; gap: 7px; padding: 9px 12px;
+    background: #fff7f6; cursor: pointer; user-select: none;
+  }
+  .group-name { font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .count { background: var(--red); color: #fff; font-size: 11px; padding: 1px 7px; border-radius: 9px; white-space: nowrap; }
+  .arrow { margin-left: auto; color: var(--red); font-size: 11px; transition: transform 0.2s; }
+  .group-card.open .arrow { transform: rotate(180deg); }
+  .group-card.open .group-head { border-bottom: 1px dashed #f0c9c9; background: #fff1f0; }
+  .group-body { display: none; padding: 10px 10px 4px; }
+  .group-card.open .group-body { display: block; }
+
+  .member {
+    border: 1px solid #f0f0f0; background: #fafafa; border-radius: 6px;
+    padding: 6px 9px; margin-bottom: 6px;
+  }
+  .m-top { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+  .m-star { color: #faad14; font-size: 13px; }
+  .m-name { font-size: 13px; font-weight: 600; }
+  .m-sub { font-size: 11px; color: #8c8c8c; margin-top: 2px; }
+  .tag { font-size: 10px; line-height: 15px; padding: 0 5px; border-radius: 3px; white-space: nowrap; }
+  .tag-leader { background: var(--red); color: #fff; }
+  .tag-role { background: #e6f4ff; color: #1677ff; border: 1px solid #91caff; }
+  .tag-sec { background: #fff7e6; color: #d46b08; border: 1px solid #ffd591; }
+
+  /* 未编组 */
+  .group-card.ungrouped { border-style: dashed; border-color: #d9d9d9; }
+  .group-card.ungrouped .group-head { background: #fafafa; }
+  .group-card.ungrouped .count { background: #8c8c8c; }
+  .group-card.ungrouped .arrow { color: #8c8c8c; }
+  .group-card.ungrouped .group-card-note { font-size: 11px; color: #bfbfbf; }
+
+  /* ===== 图例与说明 ===== */
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 16px; align-items: center;
+    margin-top: 18px; padding-top: 14px; border-top: 1px solid #f0f0f0;
+    font-size: 12px; color: #595959;
+  }
+  .legend .item { display: inline-flex; align-items: center; gap: 5px; }
+  .notes {
+    margin-top: 16px; background: #fafafa; border: 1px solid #f0f0f0; border-radius: 8px;
+    padding: 14px 18px; font-size: 12px; color: #595959; line-height: 2.05;
+  }
+  .notes b { color: rgba(0, 0, 0, 0.85); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="proto-head">
+    <h1>V3.5.3 新增模块原型 · 数据看板「组织架构」</h1>
+    <p>以下为数据看板最下方新增的「组织架构」卡片（示例数据；实际数据来自人员管理实时读取）。点击党小组卡片头部可展开 / 收起组员名单，右上角按钮可批量展开。</p>
+  </div>
+
+  <div class="position-hint">
+    数据看板既有模块（关键指标 · 会议类型分布 · 月度会议趋势 · 党员出勤率排行 · 出勤对比 · 月度谈心谈话趋势）<br>
+    「组织架构」模块置于看板最下方 ——
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title">
+        <span class="t">组织架构</span>
+        <span class="sub">共 23 人 · 在职 22 · 借调 1 · 随「人员管理」实时更新</span>
+        <span class="help" title="口径说明：&#10;· 人员范围：当前在职 + 借调人员（借调组织关系仍在支部，保留展示并标记）；调离 / 离职不显示&#10;· 数据来源：人员管理（支委职务 / 党小组 / 组长 / 部室 / 状态），进入看板自动读取最新&#10;· 党小组人数 = 组内当前在职 + 借调人数&#10;· 不随看板年份切换，始终展示当前时点架构">?</span>
+      </div>
+      <button class="btn-all" onclick="toggleAll()">展开全部</button>
+    </div>
+
+    <div class="org">
+      <!-- 第一层：书记 -->
+      <div class="spine">
+        <div class="node node-sec">
+          <div class="role">支部书记</div>
+          <div class="name">王建国</div>
+        </div>
+        <div class="drop"></div>
+        <!-- 第二层：副书记 -->
+        <div class="node node-sec">
+          <div class="role">支部副书记</div>
+          <div class="name">李 明</div>
+        </div>
+      </div>
+      <div class="drop"></div>
+
+      <!-- 第三层：支委会（仅显示有在职人员的职务，按职务定义序） -->
+      <ul class="fan">
+        <li>
+          <div class="node node-com">
+            <div class="role">组织委员</div>
+            <div class="name">张 丽</div>
+          </div>
+        </li>
+        <li>
+          <div class="node node-com">
+            <div class="role">宣传委员</div>
+            <div class="name">刘 洋</div>
+          </div>
+        </li>
+        <li>
+          <div class="node node-com">
+            <div class="role">青年委员</div>
+            <div class="name">陈 晓</div>
+          </div>
+        </li>
+        <li>
+          <div class="node node-com">
+            <div class="role">纪检委员</div>
+            <div class="name">赵 强</div>
+          </div>
+        </li>
+      </ul>
+      <div class="drop"></div>
+
+      <!-- 第四层：党小组（可展开） -->
+      <ul class="fan">
+        <li>
+          <div class="group-card open">
+            <div class="group-head" onclick="toggleGroup(this)">
+              <span class="group-name">第一党小组</span>
+              <span class="count">8人</span>
+              <span class="arrow">▼</span>
+            </div>
+            <div class="group-body">
+              <div class="member">
+                <div class="m-top"><span class="m-star">★</span><span class="m-name">周 敏</span><span class="tag tag-leader">组长</span></div>
+                <div class="m-sub">综合科</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">王建国</span><span class="tag tag-role">支部书记</span></div>
+                <div class="m-sub">会计科</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">刘 洋</span><span class="tag tag-role">宣传委员</span></div>
+                <div class="m-sub">信息科</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">孙 芳</span></div>
+                <div class="m-sub">会计科</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">吴 涛</span></div>
+                <div class="m-sub">预警科</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">郑 洁</span></div>
+                <div class="m-sub">综合科</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">马 超</span></div>
+                <div class="m-sub">信息科</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">冯 军</span><span class="tag tag-sec">借调</span></div>
+                <div class="m-sub">人事科</div>
+              </div>
+            </div>
+          </div>
+        </li>
+        <li>
+          <div class="group-card">
+            <div class="group-head" onclick="toggleGroup(this)">
+              <span class="group-name">第二党小组</span>
+              <span class="count">7人</span>
+              <span class="arrow">▼</span>
+            </div>
+            <div class="group-body">
+              <div class="member">
+                <div class="m-top"><span class="m-star">★</span><span class="m-name">张 丽</span><span class="tag tag-leader">组长</span><span class="tag tag-role">组织委员</span></div>
+                <div class="m-sub">综合科</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">李 明</span><span class="tag tag-role">支部副书记</span></div>
+                <div class="m-sub">办公室</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">赵 强</span><span class="tag tag-role">纪检委员</span></div>
+                <div class="m-sub">会计科</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">高 峰</span></div>
+                <div class="m-sub">预警科</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">林 娜</span></div>
+                <div class="m-sub">办公室</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">何 平</span></div>
+                <div class="m-sub">信息科</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">罗 静</span></div>
+                <div class="m-sub">综合科</div>
+              </div>
+            </div>
+          </div>
+        </li>
+        <li>
+          <div class="group-card">
+            <div class="group-head" onclick="toggleGroup(this)">
+              <span class="group-name">第三党小组</span>
+              <span class="count">6人</span>
+              <span class="arrow">▼</span>
+            </div>
+            <div class="group-body">
+              <div class="member">
+                <div class="m-top"><span class="m-star">★</span><span class="m-name">陈 晓</span><span class="tag tag-leader">组长</span><span class="tag tag-role">青年委员</span></div>
+                <div class="m-sub">信息科</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">黄 磊</span></div>
+                <div class="m-sub">预警科</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">谢 雨</span></div>
+                <div class="m-sub">会计科</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">唐 亮</span></div>
+                <div class="m-sub">办公室</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">许 倩</span></div>
+                <div class="m-sub">人事科</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">邓 超</span></div>
+                <div class="m-sub">预警科</div>
+              </div>
+            </div>
+          </div>
+        </li>
+        <li>
+          <div class="group-card ungrouped">
+            <div class="group-head" onclick="toggleGroup(this)">
+              <span class="group-name">未编组</span>
+              <span class="count">2人</span>
+              <span class="arrow">▼</span>
+            </div>
+            <div class="group-body">
+              <div class="member">
+                <div class="m-top"><span class="m-name">沈 明</span></div>
+                <div class="m-sub">办公室</div>
+              </div>
+              <div class="member">
+                <div class="m-top"><span class="m-name">韩 雪</span></div>
+                <div class="m-sub">人事科</div>
+              </div>
+            </div>
+          </div>
+        </li>
+      </ul>
+    </div>
+
+    <div class="legend">
+      <span class="item"><span class="m-star">★</span> + <span class="tag tag-leader">组长</span> 党小组组长（组内置顶）</span>
+      <span class="item"><span class="tag tag-role">支委职务</span> 支委职务标签</span>
+      <span class="item"><span class="tag tag-sec">借调</span> 借调人员（保留展示）</span>
+      <span class="item">虚线卡片 = 未编入党小组人员</span>
+    </div>
+  </div>
+
+  <div class="notes">
+    <b>交互说明：</b>点击党小组卡片头部 → 展开 / 收起该组组员名单（默认全部收起，原型中第一党小组为展开示例）；卡片右上角「展开全部 / 收起全部」批量操作；悬停标题旁「?」查看统计口径。<br>
+    <b>口径说明：</b>人员范围 = 当前在职 + 借调（调离 / 离职不显示）；数据来自人员管理（支委职务 / 党小组 / 组长 / 部室 / 状态），进入看板自动读取最新，不随年份切换；党小组人数 = 组内当前在职 + 借调人数；支委层级按职务定义序仅显示有人员的职务，书记节点常显（无人时显示「空缺」灰字），副书记无人时隐藏节点；组员 = 姓名 + 所在部室，组长 ★ 置顶，支委带蓝色职务标签。<br>
+    <b>待确认项</b>（详见更新方案文档）：借调人员展示口径 / 副书记空缺处理 / 未编组节点 / 党小组默认展开状态。
+  </div>
+</div>
+
+<script>
+  function toggleGroup(head) {
+    head.parentElement.classList.toggle('open');
+    syncAllBtn();
+  }
+  function toggleAll() {
+    var cards = document.querySelectorAll('.group-card');
+    var anyClosed = Array.prototype.some.call(cards, function (c) { return !c.classList.contains('open'); });
+    cards.forEach(function (c) { c.classList.toggle('open', anyClosed); });
+    syncAllBtn();
+  }
+  function syncAllBtn() {
+    var cards = document.querySelectorAll('.group-card');
+    var anyClosed = Array.prototype.some.call(cards, function (c) { return !c.classList.contains('open'); });
+    document.querySelector('.btn-all').textContent = anyClosed ? '展开全部' : '收起全部';
+  }
+</script>
+</body>
+</html>
