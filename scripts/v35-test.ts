@@ -2,7 +2,8 @@
  * V3.5 数据驱动验证脚本
  * 覆盖：月度趋势系列纯函数（空白年份→空数组 / 各类型计次 / 套会拆分 / 年份过滤 / 无数据类型剔除）、
  *       版本号单一来源（package.json ↔ vite define 注入 ↔ Settings/backup）、单实例锁静态结构校验、
- *       V3.5.1 年份选择器数据驱动、V3.5.2 在职党员年度时点计数 + 出勤对比三维度统计
+ *       V3.5.1 年份选择器数据驱动、V3.5.2 在职党员年度时点计数 + 出勤对比三维度统计、
+ *       V3.5.3 组织架构模块（statusAt 时间线 + buildOrgChart 四层树）
  * 运行：V=$(node -p "JSON.stringify(require('./package.json').version)") && \
  *       npx esbuild scripts/v35-test.ts --bundle --platform=node --format=cjs \
  *         --define:__APP_VERSION__="$V" --outfile=/tmp/v35-test.cjs && node /tmp/v35-test.cjs
@@ -14,7 +15,8 @@ import fs from 'fs';
 import path from 'path';
 import type { Meeting, Member } from '../src/types';
 import { buildMonthStackSeries, buildDimensionAttendanceRates } from '../src/utils/chartSeries';
-import { countActiveMembersAt } from '../src/utils/memberStatus';
+import { countActiveMembersAt, isActiveAt, statusAt } from '../src/utils/memberStatus';
+import { buildOrgChart, ORG_UNGROUPED } from '../src/utils/orgChart';
 import { APP_VERSION } from '../src/utils/backup';
 
 // ==================== 断言工具 ====================
@@ -287,6 +289,96 @@ function testV352Static() {
   check('Word 报告「在职党员」标签带年度时点', word.includes('在职党员（${year}年末）'), true);
 }
 
+// ==================== [8] statusAt 时间线状态判定（V3.5.3） ====================
+
+function testStatusAt() {
+  console.log('\n[16] statusAt：时间线具体状态判定（组织架构口径）');
+  const m = mkMember({
+    id: 'sa1', name: '赵六',
+    statusHistory: [
+      { status: 'active', date: '2024-01-01' },
+      { status: 'seconded', date: '2025-01-01' },
+      { status: 'active', date: '2025-06-01' },
+    ],
+  });
+  check('无状态历史 → 当前状态兜底', statusAt(mkMember({ id: 'sa2', name: '无历史', status: 'seconded', statusHistory: undefined }), '2025-01-01'), 'seconded');
+  check('在职期间 = active', statusAt(m, '2024-06-01'), 'active');
+  check('借调期间 = seconded', statusAt(m, '2025-03-01'), 'seconded');
+  check('借调回归后 = active', statusAt(m, '2025-07-01'), 'active');
+  check('早于首条 → 沿用首条状态', statusAt(m, '2023-06-01'), 'active');
+  const t = mkMember({ id: 'sa3', name: '王五', status: 'transferred', statusHistory: [{ status: 'active', date: '2024-01-15' }, { status: 'transferred', date: '2024-11-20' }] });
+  check('调离后 = transferred', statusAt(t, '2025-01-01'), 'transferred');
+
+  console.log('\n[16b] statusAt 与 isActiveAt 等价性（active ⇔ true）');
+  const dates = ['2023-06-01', '2024-06-01', '2025-03-01', '2025-07-01', '2026-01-01'];
+  const eq = dates.every(
+    (d) => (statusAt(m, d) === 'active') === isActiveAt(m, d) && (statusAt(t, d) === 'active') === isActiveAt(t, d)
+  );
+  check('多个时点两函数判定一致', eq, true);
+}
+
+// ==================== [9] 组织架构数据构建（V3.5.3） ====================
+
+function testBuildOrgChart() {
+  console.log('\n[17] buildOrgChart：四层结构与口径判定');
+  const REF = '2026-06-30';
+  const members: Member[] = [
+    mkMember({ id: 'o1', name: '王建国', title: '会计科', committeeRole: '支部书记', partyGroup: '第一党小组' }),
+    mkMember({ id: 'o2', name: '李明', title: '办公室', committeeRole: '支部副书记', partyGroup: '第二党小组' }),
+    mkMember({ id: 'o3', name: '张丽', title: '综合科', committeeRole: '组织委员', partyGroup: '第二党小组', isGroupLeader: true }),
+    mkMember({ id: 'o4', name: '张丽二', title: '综合科', committeeRole: '组织委员', partyGroup: '第二党小组' }),
+    mkMember({ id: 'o5', name: '刘洋', title: '信息科', committeeRole: '宣传委员', partyGroup: '第一党小组', isGroupLeader: true }),
+    mkMember({ id: 'o6', name: '陈晓', title: '信息科', committeeRole: '青年委员', partyGroup: '第三党小组', isGroupLeader: true }),
+    mkMember({ id: 'o7', name: '孙芳', title: '会计科', partyGroup: '第一党小组' }),
+    mkMember({ id: 'o8', name: '冯军', title: '人事科', partyGroup: '第一党小组', statusHistory: [{ status: 'active', date: '2024-01-15' }, { status: 'seconded', date: '2026-01-10' }] }),
+    mkMember({ id: 'o9', name: '蒋明辉', title: '预警科', partyGroup: '第一党小组', status: 'transferred', statusHistory: [{ status: 'active', date: '2024-01-15' }, { status: 'transferred', date: '2025-06-01' }] }),
+    mkMember({ id: 'o10', name: '沈明', title: '办公室', partyGroup: '' }),
+  ];
+  const d = buildOrgChart(members, REF);
+
+  check('书记 1 人', d.secretaries.map((s) => s.name), ['王建国']);
+  check('副书记 1 人', d.deputySecretaries.map((s) => s.name), ['李明']);
+  check('支委按定义序（组织→宣传→青年）', d.committee.map((c) => c.role), ['组织委员', '宣传委员', '青年委员']);
+  check('无人员职务不显示（纪检委员缺席）', d.committee.some((c) => c.role === '纪检委员'), false);
+  check('同职务多人全列（组织委员 2 人）', d.committee[0].members.map((m) => m.name), ['张丽', '张丽二']);
+  check('调离人员排除（汇总 9 人）', d.summary.total, 9);
+  check('借调人员保留并标记', d.groups.find((g) => g.name === '第一党小组')!.members.some((m) => m.name === '冯军' && m.isSeconded), true);
+  check('汇总：在职 8 借调 1', d.summary, { total: 9, active: 8, seconded: 1 });
+
+  const g2 = d.groups.find((g) => g.name === '第二党小组')!;
+  check('组长置顶（张丽为组长）', g2.leaders.map((m) => m.name), ['张丽']);
+  check('人数 = 组长 + 组员', g2.count, g2.leaders.length + g2.members.length);
+  const g1 = d.groups.find((g) => g.name === '第一党小组')!;
+  check('组员带部室数据', g1.members.map((m) => m.title).includes('会计科'), true);
+
+  const ug = d.groups.find((g) => g.ungrouped);
+  check('未编组归集（沈明）', ug?.members.map((m) => m.name), ['沈明']);
+  check('未编组节点名与排序最后', d.groups[d.groups.length - 1].name, ORG_UNGROUPED);
+
+  console.log('\n[18] buildOrgChart：空态与空缺场景');
+  check('空数据 → empty 且各层为空', buildOrgChart([], REF), { secretaries: [], deputySecretaries: [], committee: [], groups: [], summary: { total: 0, active: 0, seconded: 0 }, empty: true });
+  const noSecretary = buildOrgChart([mkMember({ id: 'n1', name: '普通党员', partyGroup: '第一党小组' })], REF);
+  check('书记空缺 → secretaries 为空（组件层显示空缺）', noSecretary.secretaries, []);
+  check('无副书记 → 整层为空', noSecretary.deputySecretaries, []);
+}
+
+// ==================== [10] V3.5.3 静态结构校验 ====================
+
+function testV353Static() {
+  console.log('\n[19] V3.5.3 静态结构校验（Dashboard 集成 / 组件结构）');
+  const dash = readProjectFile('src/pages/Dashboard.tsx');
+  check('Dashboard 引入 OrgChart 组件', dash.includes("import OrgChart from '../components/OrgChart'"), true);
+  check('Dashboard 底部渲染组织架构模块', dash.includes('<OrgChart members={members} />'), true);
+
+  const comp = readProjectFile('src/components/OrgChart.tsx');
+  check('组件默认收起（初始空 Set）', comp.includes('useState<Set<string>>(new Set())'), true);
+  check('展开全部 / 收起全部按钮', comp.includes("'展开全部'") && comp.includes("'收起全部'"), true);
+  check('数据构建走 buildOrgChart', comp.includes('buildOrgChart(members,'), true);
+  check('书记空缺常显', comp.includes('vacant'), true);
+  check('借调标签', comp.includes('借调'), true);
+  check('组长标签与置顶', comp.includes('组长') && comp.includes('org-star'), true);
+}
+
 // ==================== 主流程 ====================
 
 async function main() {
@@ -298,6 +390,9 @@ async function main() {
   testCountActiveMembersAt();
   testBuildDimensionAttendanceRates();
   testV352Static();
+  testStatusAt();
+  testBuildOrgChart();
+  testV353Static();
 
   console.log('\n========== 结果 ==========');
   console.log(`通过: ${pass}，失败: ${fail}`);

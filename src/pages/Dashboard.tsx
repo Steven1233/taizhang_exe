@@ -9,6 +9,7 @@ import { countActiveAttendance, membersActiveDuring, isActiveAt, countActiveMemb
 import { buildMonthStackSeries, buildDimensionAttendanceRates, type AttendanceDimension } from '../utils/chartSeries';
 import type { Meeting, Member, TalkRecord } from '../types';
 import { MEETING_TYPES, typeMeetingUnits, meetingTotalUnits } from '../types';
+import OrgChart from '../components/OrgChart';
 
 /** 年度无数据时的等高占位（V3.5 功能 1：居中灰字 + 图表底色，避免 ECharts 空坐标系） */
 function ChartPlaceholder({ text, height }: { text: string; height: number }) {
@@ -586,6 +587,11 @@ export default function Dashboard() {
           </Card>
         </Col>
       </Row>
+
+      {/* 组织架构（V3.5.3：随人员管理实时更新的当前时点架构，不随看板年份切换） */}
+      <div style={{ marginTop: 16 }}>
+        <OrgChart members={members} />
+      </div>
     </div>
   );
 }

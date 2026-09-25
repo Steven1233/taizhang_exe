@@ -21,6 +21,25 @@ export function isActiveAt(member: Member, date: string): boolean {
 }
 
 /**
+ * 返回人员在指定日期时点的具体状态（V3.5.3：组织架构时间线判定）
+ *
+ * 规则与 isActiveAt 同源，仅返回值不同（active/seconded/transferred/resigned）：
+ * - 无历史记录：返回当前 status
+ * - 有历史：取变更日期 <= 指定日期 的最近一次变更状态
+ * - 指定日期早于首条记录：沿用首条记录状态
+ */
+export function statusAt(member: Member, date: string): MemberStatus {
+  const history = member.statusHistory;
+  if (!history || history.length === 0) {
+    return member.status || 'active';
+  }
+  const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date));
+  const changes = sorted.filter((c) => c.date <= date);
+  if (changes.length === 0) return sorted[0].status; // 早于首条：沿用首条状态
+  return changes[changes.length - 1].status;
+}
+
+/**
  * 统计一场会议的出勤（V3.3 时间线在职口径）
  *
  * 仅统计按会议日期时点判定为在职的正式成员：
