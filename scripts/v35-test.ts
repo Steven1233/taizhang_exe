@@ -365,10 +365,22 @@ function testBuildOrgChart() {
 // ==================== [10] V3.5.3 静态结构校验 ====================
 
 function testV353Static() {
-  console.log('\n[19] V3.5.3 静态结构校验（Dashboard 集成 / 组件结构）');
+  console.log('\n[19] V3.5.3 静态结构校验（独立栏目：菜单 / 路由 / 页面 / 组件）');
+  const layout = readProjectFile('src/layouts/MainLayout.tsx');
+  check('左侧菜单含「组织架构」栏目', layout.includes("label: '组织架构'"), true);
+  const menuOrder = layout.indexOf("label: '数据看板'") < layout.indexOf("label: '组织架构'")
+    && layout.indexOf("label: '组织架构'") < layout.indexOf("label: '人员管理'");
+  check('菜单顺序：数据看板 → 组织架构 → 人员管理', menuOrder, true);
+
+  const app = readProjectFile('src/App.tsx');
+  check('路由 /orgchart 指向 OrgChartPage', app.includes('path="/orgchart"') && app.includes('<OrgChartPage />'), true);
+
+  const page = readProjectFile('src/pages/OrgChartPage.tsx');
+  check('页面数据加载走 db.members + normalizeMember', page.includes('db.members.toArray()') && page.includes('normalizeMember'), true);
+  check('页面渲染 OrgChart 组件', page.includes('<OrgChart members={members} />'), true);
+
   const dash = readProjectFile('src/pages/Dashboard.tsx');
-  check('Dashboard 引入 OrgChart 组件', dash.includes("import OrgChart from '../components/OrgChart'"), true);
-  check('Dashboard 底部渲染组织架构模块', dash.includes('<OrgChart members={members} />'), true);
+  check('数据看板不再内嵌组织架构（独立栏目化）', dash.includes('OrgChart'), false);
 
   const comp = readProjectFile('src/components/OrgChart.tsx');
   check('组件默认收起（初始空 Set）', comp.includes('useState<Set<string>>(new Set())'), true);

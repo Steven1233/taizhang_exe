@@ -10,6 +10,7 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   MessageOutlined,
+  ApartmentOutlined,
 } from '@ant-design/icons';
 import { autoSyncManager } from '../utils/autoSync';
 import type { AutoSyncReport } from '../utils/autoSync';
@@ -19,6 +20,7 @@ const { Header, Sider, Content } = Layout;
 
 const menuItems = [
   { key: '/dashboard', icon: <DashboardOutlined />, label: '数据看板' },
+  { key: '/orgchart', icon: <ApartmentOutlined />, label: '组织架构' },
   { key: '/members', icon: <TeamOutlined />, label: '人员管理' },
   { key: '/meetings', icon: <CalendarOutlined />, label: '会议管理' },
   { key: '/talks', icon: <MessageOutlined />, label: '谈心谈话' },

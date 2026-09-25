@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import MainLayout from './layouts/MainLayout';
 import ErrorBoundary from './components/ErrorBoundary';
 import Dashboard from './pages/Dashboard';
+import OrgChartPage from './pages/OrgChartPage';
 import Members from './pages/Members';
 import Meetings from './pages/Meetings';
 import Talks from './pages/Talks';
@@ -38,6 +39,7 @@ function App() {
       <Route element={<MainLayout />}>
         <Route path="/" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
         <Route path="/dashboard" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
+        <Route path="/orgchart" element={<ErrorBoundary><OrgChartPage /></ErrorBoundary>} />
         <Route path="/members" element={<ErrorBoundary><Members /></ErrorBoundary>} />
         <Route path="/meetings" element={<ErrorBoundary><Meetings /></ErrorBoundary>} />
         <Route path="/talks" element={<ErrorBoundary><Talks /></ErrorBoundary>} />
