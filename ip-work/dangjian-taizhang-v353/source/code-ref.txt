@@ -1,0 +1,1854 @@
+#ifndef _HYD_H_LHF_20190221_
+#define _HYD_H_LHF_20190221_
+#include <dll.h>
+typedef struct
+{
+int hour;
+int minute;
+int second;
+int millsecond;
+float diameter;
+float volume;
+float vel;
+float obl;
+float area;
+float amin;
+float amax;
+float bmin;
+float bmax;
+unsigned char valid;
+}hyddataPoint;
+struct hyddataSec
+{
+float ndi;
+float veli;
+void* datalist;		// hyddataPoint list.
+};
+struct hyddataVara
+{
+double StMn2;
+double StMn3;
+double StMn4;
+double RadarZ;
+double para[4];		// RnRtSt, Dm, Nw, RadarZ
+};
+struct hyddata
+{
+void*** sec;
+char date[32];
+void* vara;			// hyddataVara*
+void** surf;		// max four surface
+void* dtmng;
+};
+enum hydimg
+{
+HIT_INIT	= 1,
+HIT_DM		= 2,
+HIT_NW		= 4,
+HIT_RR		= 8,
+HIT_DBZ		= 16
+};
+typedef void (*CallBackMessage)(char* message);
+typedef void (*CallBackProgress)(int index, int count);
+typedef unsigned char (*FunAddData)(void* parray, hyddataPoint* pdata);
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+//////////////////////////////////////////////////////////////////////////
+//
+DLL_DECL void*	hyddata_Init(char* datafile, char* config, CallBackMessage cbmsg, CallBackProgress cbprog);
+DLL_DECL void	hyddata_ToFile(void* pthis, char* filename);
+DLL_DECL unsigned char hyddata_Export(void* pthis, char* filename);
+DLL_DECL unsigned char hyddata_ExportData(void* pthis, char* path, char* filename);
+DLL_DECL unsigned char hyddata_Image(void* pthis, int width, int height, int imgtype, CallBackMessage cbmsg, CallBackProgress cbprog);
+DLL_DECL unsigned char hyddata_ImageVara(void* pthis, char* imagefile, int width, int height);
+DLL_DECL void	hyddata_Free(void* pthis);
+DLL_DECL int hyddata_GetImage(void* pthis, unsigned char** img, int index);
+DLL_DECL void FreeImageContent(unsigned char* pmem);
+#ifdef __cplusplus
+}
+#endif
+#endif
+#include <stdio.h>
+#include <stdlib.h>
+#include <memory.h>
+#include <math.h>
+#include <string.h>
+#include <hyd.h>
+#include <DataStructure.h>
+#include <cairo/cairo.h>
+#include <image.h>
+#include <charset.h>
+#include <common.h>
+#include <ResData.h>
+#include <datetime.h>
+#include <cairoext.h>
+#include "data.h"
+#define MINUTE_DAY 1440
+#define MINUTE_SECTON 41
+#define DIM_SECTON_Y 8
+#define DIM_SECTON_X 24
+#define M_PI 3.1415925
+#define AXIS_TICK 4
+#define DIFF 0.0001
+#define SURF_COUNT 5
+#ifdef WIN32
+#pragma comment(lib, "DataStructure.lib")
+#pragma comment(lib, "cairo.lib")
+#pragma comment(lib, "image.lib")
+#pragma comment(lib, "common.lib")
+#pragma comment(lib, "resdata.lib")
+#pragma comment(lib, "datetime.lib")
+#pragma comment(lib, "charset.lib")
+#pragma comment(lib, "cairoext.lib")
+#endif
+char g_yTitle[4][64] = {"Rain Rate(mm/h)", "Dm(mm)", "Log10Nw", "dBZ"};
+char g_prefix[4][8] = {"_rr", "_dm", "_nw", "_dbz"};
+CallBackMessage g_cbmsg = NULL;
+CallBackProgress g_cbprog = NULL;
+extern "C" unsigned char hyddata_Read(void* parray, int row, int col, char* filename, char* config, FunAddData funAddData);
+//////////////////////////////////////////////////////////////////////////
+// hyddata_point
+void hyddataPoint_Initialise(hyddataPoint* pthis)
+{
+if(!pthis) return;
+memset(pthis, 0, sizeof(hyddataPoint));
+pthis->valid = 1;
+}
+void hyddataPoint_Destroy(hyddataPoint* pthis)
+{
+if(!pthis) return;
+}
+void hyddataPoint_Export(hyddataPoint* pthis, FILE* fp)
+{
+if(!pthis || !fp) return;
+char line[256] = {0};
+sprintf(line, "%d,%d,%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n",
+pthis->hour, pthis->minute, pthis->second, pthis->millsecond, pthis->diameter, pthis->volume, pthis->vel, pthis->obl,
+pthis->area, pthis->amin, pthis->amax, pthis->bmin,pthis->bmax);
+fputs(line, fp);
+}
+unsigned char hyddataPoint_QC(hyddataPoint* pthis)
+{
+unsigned char ret = 0;
+if(!pthis) return ret;
+double vel = -0.1021 + 4.932 * pthis->diameter - 0.9551 * pow(pthis->diameter, 2) +
+0.07934 * pow(pthis->diameter, 3) - 0.002362 * pow(pthis->diameter, 4);
+float ratio = 0.4;
+if(pthis->vel <= vel * (1 + ratio) && pthis->vel >= vel * (1 - ratio))
+ret = 1;
+return ret;
+}
+//////////////////////////////////////////////////////////////////////////
+// hyddata_sec
+void hyddataSec_Initialise(hyddataSec* pthis)
+{
+if(!pthis) return;
+memset(pthis, 0, sizeof(hyddataSec));
+pthis->datalist = NULL;
+pthis->ndi = 0;
+pthis->veli = 0;
+}
+void hyddataSec_Destroy(hyddataSec* pthis)
+{
+if(!pthis) return;
+DLinkList* plist = (DLinkList*)pthis->datalist;
+if(plist)
+{
+plist->MoveFirst(plist);
+do
+{
+hyddataPoint* hd = (hyddataPoint*)plist->GetData(plist, NULL);
+if(!hd) continue;
+hyddataPoint_Destroy(hd);
+} while (plist->MoveNext(plist));
+DLinkList_Free(plist);
+}
+pthis->datalist = NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+// hyddata_vara
+void hyddataVara_Initialise(hyddataVara* pthis)
+{
+if(!pthis) return;
+memset(pthis, 0, sizeof(hyddataVara));
+pthis->RadarZ = 0;
+}
+void hyddataVara_Destroy(hyddataVara* pthis)
+{
+if(!pthis) return;
+}
+unsigned char hyddataVara_GetData(hyddataVara* pthis, float* data, int index, float* fmin, float* fmax, float unValid)
+{
+unsigned char ret = 0;
+if(!pthis || !data) return ret;
+float minv = 999999, maxv = -999999;
+for (int i=0; i<MINUTE_DAY; i++)
+{
+float ftmp = pthis[i].para[index];
+data[i] = ftmp;
+if(fabs(ftmp - unValid) <= DIFF) continue;
+if(ftmp > maxv) maxv = ftmp;
+if(ftmp < minv) minv = ftmp;
+ret = 1;
+}
+if(3 == index)
+{
+printf("test\n");
+}
+if(1 == ret)
+{
+if(fmin) *fmin = minv;
+if(fmax) *fmax = maxv;
+}
+else
+{
+if(fmin) *fmin = 0;
+if(fmax) *fmax = 40;
+ret = 1;
+}
+ret = 1;
+return ret;
+}
+//////////////////////////////////////////////////////////////////////////
+// hyddata
+void hyddata_Initialise(hyddata* pthis)
+{
+if(!pthis) return;
+memset(pthis, 0, sizeof(hyddata));
+pthis->sec = NULL;
+pthis->dtmng = Datetime_Init();
+pthis->vara = NULL;
+pthis->surf = NULL;
+}
+void hyddata_DestroySurface(hyddata* pthis)
+{
+if(pthis->surf)
+{
+for (int i=0; i<SURF_COUNT; i++)
+{
+cairo_surface_t* surf = (cairo_surface_t*)pthis->surf[i];
+if(!surf) continue;
+cairo_surface_destroy(surf);
+}
+free(pthis->surf);
+}
+pthis->surf = NULL;
+}
+void hyddata_Destroy(hyddata* pthis)
+{
+if(!pthis) return;
+if(pthis->dtmng) Datetime_Free(pthis->dtmng);
+if(pthis->vara)
+{
+hyddataVara* va = (hyddataVara*)pthis->vara;
+for (int i=0; i<MINUTE_DAY; i++)
+{
+hyddataVara* hv = &va[i];
+hyddataVara_Destroy(hv);
+}
+free(va);
+}
+pthis->vara = NULL;
+hyddata_DestroySurface(pthis);
+}
+unsigned char hyddata_Add(void* pthis, hyddataPoint* pdata)
+{
+unsigned char ret = 0;
+if(!pthis || !pdata) return ret;
+if(0 == hyddataPoint_QC(pdata)) return ret;
+int row = pdata->hour * 60 + pdata->minute;
+if(row >= MINUTE_DAY || row < 0) return ret;
+if(g_cbprog) g_cbprog(row, MINUTE_DAY);
+float ftmp = (pdata->diameter / 0.2f);
+int col = floor(ftmp);
+//if(abs(ftmp - col) <= 0.001f) col -= 1;
+if(col >= MINUTE_SECTON || col < 0) return ret;
+hyddata* tmp = (hyddata*)pthis;
+void*** plist = tmp->sec;
+hyddataSec* hds = (hyddataSec*)plist[row][col];
+if(!hds)
+{
+hds = (hyddataSec*)malloc(sizeof(hyddataSec));
+hyddataSec_Initialise(hds);
+plist[row][col] = hds;
+}
+if(1 == pdata->valid)
+{
+double StNDi = 1.0 * 1000.0 * 1000.0 / (pdata->area * pdata->vel);
+hds->ndi += (float)(StNDi / (60 * 0.2));
+hds->veli += pdata->vel;
+}
+DLinkList* qlist = (DLinkList*)hds->datalist;
+if(!qlist)
+{
+qlist = (DLinkList*)malloc(sizeof(DLinkList));
+DLinkList_Init(qlist);
+hds->datalist = qlist;
+}
+qlist->Add(qlist, pdata, sizeof(hyddataPoint));
+ret = 1;
+return ret;
+}
+void hyddata_BuildAvgVel(hyddata* pthis)
+{
+if(!pthis || pthis->vara) return;
+void*** plist = pthis->sec;
+for (int i=0; i<MINUTE_DAY; i++)
+{
+for (int j=0; j<MINUTE_SECTON; j++)
+{
+hyddataSec* sec = (hyddataSec*)plist[i][j];
+if(!sec || !sec->datalist) continue;;
+DLinkList* qlist = (DLinkList*)sec->datalist;
+if(qlist->m_Size <= 0) continue;
+sec->veli = sec->veli / qlist->m_Size;
+}
+}
+}
+unsigned char hyddata_BuildVara(hyddata* pthis)
+{
+unsigned char ret = 0;
+if(!pthis || pthis->vara) return ret;
+hyddata_BuildAvgVel(pthis);
+hyddataVara* tv = (hyddataVara*)malloc(sizeof(hyddataVara) * MINUTE_DAY);
+void*** plist = pthis->sec;
+int i = 0;
+for (i=0; i<MINUTE_DAY; i++)
+{
+hyddataVara* pv = &tv[i];
+hyddataVara_Initialise(pv);
+double RnRtSt = 0, StMn2 = 0, StMn3 = 0, StMn4 = 0, Water = 0, RadarZ = 0;
+for (int j=0; j<MINUTE_SECTON; j++)
+{
+hyddataSec* sec = (hyddataSec*)plist[i][j];
+if(!sec) continue;;
+double dd = (j + 1) * 0.2  - 0.1;
+RnRtSt += 6 * M_PI * sec->veli * sec->ndi * pow(dd, 3) * 0.2 / 10000.0;
+StMn2 += sec->ndi * 0.2 * dd * dd;
+StMn3 += sec->ndi * 0.2 * dd * dd * dd;
+StMn4 += sec->ndi * 0.2 * dd * dd * dd * dd;
+Water += M_PI * sec->ndi * 0.2 * dd * dd * dd / (6000.0);
+RadarZ += sec->ndi * 0.2 * pow(dd, 6);
+}
+pv->para[0] = RnRtSt;
+pv->StMn2 = StMn2;
+pv->StMn3 = StMn3;
+pv->StMn4 = StMn4;
+if(RadarZ > 0)
+pv->RadarZ = 10.0*log10(RadarZ);
+if(pv->StMn3 > 0)
+{
+pv->para[1] = StMn4 / StMn3;
+pv->para[2] = log10(256.0 * 1000.0 * Water / (M_PI * pow(pv->para[1], 4)));
+}
+if(pv->RadarZ >= 0)
+pv->para[3] = pv->RadarZ;
+}
+pthis->vara = tv;
+return ret;
+}
+void hyddata_ExportTitle(hyddata* pthis, FILE* fp)
+{
+if(!pthis || !fp) return;
+char line[128] = {0};
+sprintf(line, "hour,minute,second,millsecond,diameter,volume,vel,obl,area,amin,amax,bmin,bmax\n");
+fputs(line, fp);
+}
+void hyddata_ExportTitleImage(hyddata* pthis, FILE* fpv, FILE* fp)
+{
+if(!pthis || !fp) return;
+char line[1024] = {0};
+if(fp)
+{
+sprintf(line, "hour,minute");
+for (int i=0; i<MINUTE_SECTON; i++)
+{
+char str[16] = {0};
+sprintf(str, ",dia%.1f", i*0.2+0.1);
+strcat(line, str);
+}
+strcat(line, "\n");
+fputs(line, fp);
+}
+if(fpv)
+{
+sprintf(line, "hour,minute,RnRtSt,Dm,Nw,RadarZ\n");
+fputs(line, fpv);
+}
+}
+//////////////////////////////////////////////////////////////////////////
+// filename:  no subfix.
+unsigned char hyddata_ExportData(void* pthis, char* path, char* filename)
+{
+unsigned char ret = 0;
+if(!pthis || !filename) return ret;
+hyddata* tmp = (hyddata*)pthis;
+if(!tmp) return ret;
+hyddataVara* hv = (hyddataVara*)tmp->vara;
+if(!hv) return ret;
+char f1[256] = {0}, f2[256] = {0};
+sprintf(f1, "%s%s_var.csv", path, filename);
+sprintf(f2, "%s%s_ndi.csv", path, filename);
+FILE* fpv = fopen(f1, "wt");
+FILE* fp = fopen(f2, "wt");
+if(fpv && fp)
+{
+hyddata_ExportTitleImage(tmp, fpv, fp);
+void*** plist = tmp->sec;
+char line[1024] = {0}, strtmp[16] = {0};
+for (int i=0; i<MINUTE_DAY; i++)
+{
+int hour = i / 60;
+int minute = i % 60;
+memset(line, 0, 1024);
+sprintf(line, "%d,%d", hour, minute);
+for (int j=0; j<MINUTE_SECTON; j++)
+{
+hyddataSec* hds = (hyddataSec*)plist[i][j];
+if(!hds) sprintf(strtmp, ",0");
+else sprintf(strtmp, ",%.4f", hds->ndi);
+strcat(line, strtmp);
+}
+strcat(line, "\n");
+fputs(line, fp);
+hyddataVara* dv = &hv[i];
+sprintf(line, "%d,%d,%f,%f,%f,%f\n", hour, minute, dv->para[0], dv->para[1], dv->para[2], dv->para[3]);
+fputs(line, fpv);
+ret = 1;
+}
+}
+if(fp)	fclose(fp);
+if(fpv) fclose(fpv);
+return ret;
+}
+unsigned char hyddata_Export(void* pthis, char* filename)
+{
+unsigned char ret = 0;
+if(!pthis || !filename) return ret;
+hyddata* tmp = (hyddata*)pthis;
+FILE* fp = fopen(filename, "wt");
+if(!fp) return ret;
+hyddata_ExportTitle(tmp, fp);
+void*** plist = tmp->sec;
+for (int i=0; i<MINUTE_DAY; i++)
+{
+for (int j=0; j<MINUTE_SECTON; j++)
+{
+hyddataSec* hds = (hyddataSec*)plist[i][j];
+if(!hds) continue;
+DLinkList* qlist = (DLinkList*)hds->datalist;
+if(!qlist) continue;
+qlist->MoveFirst(qlist);
+do
+{
+hyddataPoint* p = (hyddataPoint*)qlist->GetData(qlist, NULL);
+if(!p) continue;
+hyddataPoint_Export(p, fp);
+ret = 1;
+} while (qlist->MoveNext(qlist));
+}
+}
+fclose(fp);
+return ret;
+}
+void hyddata_Print(void* pthis)
+{
+if(!pthis) return ;
+hyddata* tmp = (hyddata*)pthis;
+void*** plist = tmp->sec;
+for (int i=0; i<MINUTE_DAY; i++)
+{
+int count = 0;
+for (int j=0; j<MINUTE_SECTON; j++)
+{
+hyddataSec* hds = (hyddataSec*)plist[i][j];
+if(!hds) continue;
+DLinkList* qlist = (DLinkList*)hds->datalist;
+if(!qlist) continue;
+printf("[%d][%d],", j+1, qlist->m_Size);
+count += qlist->m_Size;
+}
+if(count > 0) printf("[%d][%d]\n", i+1, count);
+}
+}
+float hyddata_DataCountTras(float val)
+{
+float ret = val;
+if(val > 0) ret = log10(val);
+return ret;
+}
+void hyddata_ToFile(void* pthis, char* filename)
+{
+if(!pthis || !filename) return;
+hyddata* tmp = (hyddata*)pthis;
+void*** plist = tmp->sec;
+char line[128] = {0};
+FILE* fp = fopen(filename, "wt");
+for (int i=0; i<MINUTE_DAY; i++)
+{
+int count = 0;
+for (int j=0; j<MINUTE_SECTON; j++)
+{
+float ftmp = 0;
+hyddataSec* hds = (hyddataSec*)plist[i][j];
+if(hds) ftmp = hds->ndi;
+ftmp = hyddata_DataCountTras(ftmp);
+sprintf(line, "%02d:%02d,%.2f,%.2f\n", i / 60, i % 60, j * 0.2, ftmp);
+fputs(line, fp);
+}
+}
+fclose(fp);
+}
+void hyddata_Free(void* pthis)
+{
+if(!pthis) return;
+hyddata* tmp = (hyddata*)pthis;
+hyddata_Destroy(tmp);
+void*** pa = tmp->sec;
+for (int i=0; i<MINUTE_DAY; i++)
+{
+for (int j=0; j<MINUTE_SECTON; j++)
+{
+hyddataSec* sec = (hyddataSec*)pa[i][j];
+if(!sec) continue;
+hyddataSec_Destroy(sec);
+free(sec);
+}
+free(pa[i]);
+}
+free(pa);
+free(tmp);
+}
+int hyddata_GetImage(void* pthis, unsigned char** img, int index)
+{
+int ret = 0;
+if(!pthis) return ret;
+hyddata* mng = (hyddata*)pthis;
+if(!mng->surf || index >= SURF_COUNT || !mng->surf[index]) return ret;
+cairo_surface_t* surf = (cairo_surface_t*)mng->surf[index];
+if(!surf) return ret;
+ret = cairo_ImageContentGet(surf, img);
+return ret;
+}
+void FreeImageContent(unsigned char* pmem)
+{
+if(!pmem) cairo_ImageContentFree(pmem);
+}
+void* hyddata_Init(char* datafile, char* config /*= "hyd2asc.set"*/, CallBackMessage cbmsg /*= NULL*/, CallBackProgress cbprog /*= NULL*/)
+{
+hyddata* ret = NULL;
+if(!datafile) return ret;
+ret = (hyddata*)malloc(sizeof(hyddata));
+hyddata_Initialise(ret);
+g_cbprog = cbprog;
+g_cbmsg = cbmsg;
+void*** tmp = NULL;
+tmp = (void***)malloc(sizeof(void**) * MINUTE_DAY);
+for (int i=0; i<MINUTE_DAY; i++)
+{
+tmp[i] = (void**)malloc(sizeof(void*) * MINUTE_SECTON);
+for (int j=0; j<MINUTE_SECTON; j++) tmp[i][j] = NULL;
+}
+ret->sec = tmp;
+char* pconf = config;
+if(!pconf) pconf = "hyd2asc.set";
+if(0 == hyddata_Read(ret, MINUTE_DAY, MINUTE_SECTON, datafile, pconf, hyddata_Add))
+{
+hyddata_Free(ret);
+ret = NULL;
+}
+else
+{
+Datetime* dt = (Datetime*)ret->dtmng;
+time_t t = time(NULL);
+char str[8] = "YYYY";
+dt->Format(dt, str, t);
+char filename[1024]; sprintf(filename, "%s", datafile);Charset_ReplaceStrSelf(filename, "\\", "/");
+char* p = strrchr(filename, '/');
+if(!p) p = filename;
+else p += 1;
+memcpy(&str[2], &p[1], 2);
+int year = atoi(str);
+memset(str, 0, 8); memcpy(str, &p[3], 3);
+int day = atoi(str);
+t = dt->GetByDay(dt, year, day);
+sprintf(ret->date, "{yyyy}-{MM}-{DD}");
+dt->Replace(dt, ret->date, t);
+hyddata_BuildVara(ret);
+}
+return ret;
+}
+void hyddata_ImageLabelX(cairo_t* cr, int width, int height, int left, int right, int bottom, int top)
+{
+char label[64] = "00:00";
+cairo_text_extents_t fs;
+Cairo_GetTextExtens(cr, &fs, "Sans", 18, label);
+int fcn = floor((width - left - right) * 1.0f / (fs.width + 5));
+if(fcn > DIM_SECTON_X) fcn = DIM_SECTON_X;
+int stepf = ceil(DIM_SECTON_X * 1.0f / fcn);
+PointD p;
+float stepx = (width - left - right) * 1.0f / (DIM_SECTON_X);
+for (int i=0; i<=DIM_SECTON_X; i+=stepf)
+{
+int hour = i % DIM_SECTON_X;
+sprintf(label, "%02d:00", hour);
+Cairo_GetTextExtens(cr, &fs, "Sans", 18, label);
+p.x = (left + i * stepx) - fs.width / 2.0f + 2;
+p.y = height - bottom + 10 + fs.height;
+Cairo_DrawString(cr, &p, label);
+}
+sprintf(label, "Time(hr)");
+Cairo_GetTextExtens(cr, &fs, "Sans", 20, label);
+p.x = left + (width - left - right - fs.width) / 2.0f;
+p.y += fs.height + 10;
+Cairo_DrawString(cr, &p, label);
+}
+int hyddata_ImageLabelY(cairo_t* cr, char* yAxisTitle, int yTickLabelCn, int bits, float* pfmax, float* pfmin, int width, int height, int left, int right, int bottom, int top)
+{
+if(!cr || !yAxisTitle || !pfmax || !pfmin) return yTickLabelCn;
+float fmax = *pfmax;
+float fmin = *pfmin;
+char bufmin[64] = {0}, bufmax[64] = {0}, ibufmin[32] = {0}, ibufmax[32] = {0}, format[32] = {0};
+if(0 == bits)
+{
+strcpy(format, "%d");
+sprintf(bufmin, format, (int)fmin);
+sprintf(bufmax, format, (int)fmax);
+}
+else if(bits > 0)
+{
+sprintf(format, "%%.%df", bits);
+sprintf(bufmin, format, fmin);
+sprintf(bufmax, format, fmax);
+}
+char utf8[128] = {0}, utfi[64] = {0};
+sprintf(utf8, "%s", bufmax);
+if(strlen(bufmin) > strlen(bufmax)) sprintf(utf8, "%s", bufmin);
+float diff = fmax - fmin;
+int idf = ceil(diff);
+if(0 != idf % 2) diff = (idf / 2 + 1) * 2;
+float stepy_val = diff / yTickLabelCn;
+if(bits == 0)
+{
+if(stepy_val < 1)
+{
+stepy_val = 1;
+yTickLabelCn = (int)((fmax - fmin) / stepy_val);
+}
+else if(floor(stepy_val) != ceil(stepy_val))
+{
+do
+{
+yTickLabelCn -= 1;
+stepy_val = (fmax - fmin) / yTickLabelCn;
+} while (floor(stepy_val) != ceil(stepy_val));
+}
+}
+cairo_text_extents_t fs;
+Cairo_GetTextExtens(cr, &fs, "Sans", 18, utf8);
+int fcn = floor((height - top - bottom) * 1.0f / (fs.height + 5));
+if(fcn > yTickLabelCn) fcn = yTickLabelCn;
+int stepf = ceil(yTickLabelCn * 1.0f / fcn);
+float stepy = (height - bottom - top) * 1.0 / yTickLabelCn;
+PointD p;
+for (int i=0; i<= yTickLabelCn; i+=stepf)
+{
+p.x = left - 15 - fs.width;
+p.y = (height - bottom  - i * stepy) + fs.height / 2.0f;
+if(0 == bits) sprintf(utf8, "%d", (int)(i * stepy_val + fmin));
+else printf(utf8, format, i * stepy_val + fmin);
+Cairo_DrawString(cr, &p, utf8);
+}
+sprintf(utf8, "%s", yAxisTitle);
+Cairo_GetTextExtens(cr, &fs, "Sans", 20, utf8);
+p.x -= (fs.height - 8);//left - 15 - 10 - fs.height;
+p.y = height - bottom - (height - top - bottom - fs.width) / 2.0f;
+cairo_move_to(cr, p.x, p.y);
+cairo_save(cr);
+cairo_rotate(cr, -1 * M_PI / 2.0f);
+cairo_show_text(cr, utf8);
+cairo_restore(cr);
+return yTickLabelCn;
+}
+void hyddata_ImageLabelTitle(cairo_t* cr, char* title, int width, int height, int left, int right, int bottom, int top)
+{
+if(!cr || !title) return;
+PointD p;
+cairo_text_extents_t fs;
+Cairo_GetTextExtens(cr, &fs, "Sans", 20, title);
+p.x = left + (width - left - right - fs.width) / 2.0f;
+p.y = (top - fs.height) / 2.0f + fs.height;
+Cairo_DrawString(cr, &p, title);
+}
+void hyddata_ImageLabelColor(cairo_t* cr, int width, int height, int left, int right, int bottom, int top)
+{
+PointD p;
+char label[64] = "00:00";
+cairo_text_extents_t fs;
+sprintf(label, "Log10N(d)");
+Cairo_GetTextExtens(cr, &fs, "Sans", 14, label);
+p.x = width - right;
+p.y = top - 2;
+Cairo_DrawString(cr, &p, label);
+}
+void hyddata_ImageAxisY(cairo_t* cr, int yTickCount, int width, int height, int left, int right, int bottom, int top)
+{
+if(!cr) return;
+float stepy = (height - bottom - top) * 1.0 / yTickCount;
+for (int i=0; i<= yTickCount; i++)
+{
+cairo_move_to(cr, left, top + i * stepy);
+cairo_line_to(cr, left - AXIS_TICK, top + i * stepy);
+}
+cairo_stroke(cr);
+}
+void hyddata_ImageAxisX(cairo_t* cr, int width, int height, int left, int right, int bottom, int top)
+{
+if(!cr) return;
+cairo_set_source_rgba(cr, 0, 0, 0, 1);
+cairo_rectangle(cr, left, top, width - left - right, height - top - bottom);
+cairo_stroke(cr);
+int i = 0;
+float stepx = (width - left - right) * 1.0f / (DIM_SECTON_X);
+for (i=0; i<=DIM_SECTON_X; i++)
+{
+cairo_move_to(cr, left + i * stepx, height - bottom);
+cairo_line_to(cr, left + i * stepx, height - bottom + AXIS_TICK);
+}
+cairo_stroke(cr);
+}
+void hyddata_ImageData(void* pthis, cairo_t* cr, int width, int height, int left, int right, int bottom, int top, ColorTable* ct)
+{
+if(!pthis || !cr || !ct) return;
+hyddata* tmp = (hyddata*)pthis;
+void*** plist = tmp->sec;
+double stepx = (width - left - right) * 1.0f / (MINUTE_DAY);
+double stepy = (height - top - bottom) * 1.0f / (MINUTE_SECTON);
+double fmin = 10000;
+double fmax = 0;
+Color c; Color_Default(&c); c.a = 0;
+Color* pc = &c;
+for (int i=0; i<MINUTE_DAY; i++)
+{
+int count = 0;
+for (int j=0; j<MINUTE_SECTON; j++)
+{
+hyddataSec* hds = (hyddataSec*)plist[i][j];
+float ftmp = 0;
+if(hds) ftmp = hds->ndi;
+ftmp = hyddata_DataCountTras(ftmp);
+if(ftmp < fmin) fmin = ftmp;
+if(ftmp > fmax) fmax = ftmp;
+pc = ColorTable_FindColor(ct, ftmp);
+if(!pc) pc = &c;
+cairo_set_source_rgba(cr, pc->r / 255.0f, pc->g / 255.0f, pc->b / 255.0f, pc->a / 255.0f);
+cairo_rectangle(cr, left + i*stepx, height - bottom - (j + 1) * stepy, stepx, stepy);
+cairo_fill(cr);
+}
+}
+}
+unsigned char hyddata_ImageInitInside(void* pthis, char* imagefile, cairo_surface_t* surface, int width, int height)
+{
+unsigned char ret = 0;
+if(!pthis || !surface) return ret;
+hyddata* mng = (hyddata*)pthis;
+cairo_t* cr = cairo_create(surface);
+cairo_set_source_rgba(cr, 1, 1, 1, 1);
+cairo_paint (cr);
+int left = 70;
+int right = 70;
+int bottom = 60;
+int top = 30;
+float ymax = DIM_SECTON_Y, ymin = 0;
+hyddata_ImageAxisX(cr, width, height, left, right, bottom, top);
+hyddata_ImageAxisY(cr, DIM_SECTON_Y, width, height, left, right, bottom, top);
+hyddata_ImageLabelX(cr, width, height, left, right, bottom, top);
+hyddata_ImageLabelY(cr, "Drop Size(mm)", DIM_SECTON_Y, 0, &ymax, &ymin, width, height, left, right, bottom, top);
+hyddata_ImageLabelColor(cr, width, height, left, right, bottom, top);
+ColorTable* ct = Fill_GetColorTable("hyd");
+if(pthis)
+{
+hyddata_ImageLabelTitle(cr, mng->date, width, height, left, right, bottom, top);
+hyddata_ImageData(pthis, cr, width, height, left, right, bottom, top, ct);
+}
+int cw = 50;
+int ch = height - top - bottom;
+cairo_surface_t* csurf = cairo_surface_create_for_rectangle(surface, width - cw - 5, top, cw, ch);
+cairo_t* ccr = cairo_create(csurf);
+Draw_ColorTable(ct, ccr, cw, ch, CBP_LEFT, 12, 1);
+cairo_destroy(ccr);
+cairo_surface_destroy(csurf);
+if(imagefile)
+cairo_surface_write_to_png(surface, imagefile);
+cairo_destroy(cr);
+ret = 1;
+return ret;
+}
+unsigned char hyddata_ImageInit(void* pthis, char* imagefile, int width, int height)
+{
+unsigned char ret = 0;
+if(!pthis || width <= 0 || height <= 0) return ret;
+hyddata* mng = (hyddata*)pthis;
+cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+ret = hyddata_ImageInitInside(pthis, imagefile, surface, width, height);
+cairo_surface_destroy(surface);
+ret = 1;
+return ret;
+}
+unsigned char hyddata_ImageVaraData(cairo_t* cr, float* data, float fmin, float fmax, float unValid, int width, int height, int left, int right, int bottom, int top)
+{
+unsigned char ret = 0;
+if(!cr || !data) return ret;
+double sx, sy, dh = height - top - bottom;
+double stepx = (width - left - right) *  1.0f / (MINUTE_DAY);
+unsigned char first = 0;
+int i = 0, j = 0;
+do
+{
+if(fabs(data[i] - unValid) <= DIFF)
+{
+i += 1;
+continue;
+}
+sx = left + i * stepx;
+sy = top + dh - (data[i] - fmin) / (fmax - fmin) * dh;
+cairo_move_to(cr, sx, sy);
+for (j=i+1; j<MINUTE_DAY; j++)
+{
+if(fabs(data[j] - unValid) <= DIFF) break;
+sx = left + j * stepx;
+sy = top + dh - (data[j] - fmin) / (fmax - fmin) * dh;
+cairo_line_to(cr, sx, sy);
+}
+cairo_stroke(cr);
+i = j + 1;
+}while (i < MINUTE_DAY);
+ret = 1;
+return ret;
+}
+unsigned char hyddata_ImageVaraInside(void* pthis, char* imagefile, cairo_surface_t* surface, int width, int height, int index)
+{
+unsigned char ret = 0;
+if(!pthis || !surface) return ret;
+hyddata* mng = (hyddata*)pthis;
+int left = 70;
+int right = 70;
+int bottom = 60;
+int top = 30;
+hyddataVara* hv = (hyddataVara*)mng->vara;
+double dh = (height - top - bottom) / 3.0f;
+float fdata[MINUTE_DAY];
+cairo_t* cr = cairo_create(surface);
+cairo_set_source_rgba(cr, 1, 1, 1, 1);
+cairo_paint (cr);
+hyddata_ImageAxisX(cr, width, height, left, right, bottom, top);
+hyddata_ImageLabelX(cr, width, height, left, right, bottom, top);
+hyddata_ImageLabelTitle(cr, mng->date, width, height, left, right, bottom, top);
+float minv = 0, maxv = 0, unValid = 0;
+unsigned char uc = hyddataVara_GetData(hv, fdata, index, &minv, &maxv, unValid);
+maxv = ceil(maxv);
+if(minv > 0) minv = 0;
+Axis_YAjustMaxMin(&minv, &maxv);
+int yTickCount = hyddata_ImageLabelY(cr, g_yTitle[index], DIM_SECTON_Y, 0, &maxv, &minv, width, height, left, right, bottom, top);
+hyddata_ImageAxisY(cr, yTickCount, width, height, left, right, bottom, top);
+if(1 == uc) hyddata_ImageVaraData(cr, fdata, minv, maxv, unValid, width, height, left, right, bottom, top);
+if(imagefile)
+{
+char filename[128] = {0};
+sprintf(filename, "%s", imagefile);
+char* p = strrchr(filename, '.');
+memcpy(p, g_prefix[index], strlen(g_prefix[index])); p += strlen(g_prefix[index]); memcpy(p, ".png", 4);
+cairo_surface_write_to_png(surface, filename);
+}
+cairo_surface_write_to_png(surface, "test.png");
+cairo_destroy(cr);
+ret = 1;
+return ret;
+}
+unsigned char hyddata_ImageVara(void* pthis, char* imagefile, int width, int height)
+{
+unsigned char ret = 0;
+if(!pthis) return ret;
+hyddata* mng = (hyddata*)pthis;
+for (int i=0; i<SURF_COUNT-1; i++)
+{
+cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+ret |= hyddata_ImageVaraInside(pthis, imagefile, surface, width, height, i);
+cairo_surface_destroy(surface);
+}
+return ret;
+}
+unsigned char hyddata_Image(void* pthis, int width, int height, int imgtype, CallBackMessage cbmsg /*= NULL*/, CallBackProgress cbprog /*= NULL*/)
+{
+unsigned char ret = 0;
+if(!pthis || imgtype == 0) return ret;
+hyddata* mng = (hyddata*)pthis;
+hyddata_DestroySurface(mng);
+mng->surf = (void**)malloc(sizeof(void*) * SURF_COUNT);
+memset(mng->surf, NULL, SURF_COUNT);
+if(imgtype & HIT_INIT)
+{
+cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+ret = hyddata_ImageInitInside(pthis, NULL, surface, width, height);
+mng->surf[0] = surface;
+}
+int index = 0;
+if(imgtype & HIT_RR)
+{
+index = 0;
+cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+ret |= hyddata_ImageVaraInside(pthis, NULL, surface, width, height, index);
+mng->surf[index+1] = surface;
+}
+if(imgtype & HIT_DM)
+{
+index = 1;
+cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+ret |= hyddata_ImageVaraInside(pthis, NULL, surface, width, height, index);
+mng->surf[index+1] = surface;
+}
+if(imgtype & HIT_NW)
+{
+index = 2;
+cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+ret |= hyddata_ImageVaraInside(pthis, NULL, surface, width, height, index);
+mng->surf[index+1] = surface;
+}
+if(imgtype & HIT_DBZ)
+{
+index = 3;
+cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+ret |= hyddata_ImageVaraInside(pthis, NULL, surface, width, height, index);
+mng->surf[index+1] = surface;
+}
+return ret;
+}
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data;
+using System.Drawing;
+using System.Text;
+using System.Windows.Forms;
+using System.IO;
+using System.Threading;
+using cxControl.ListBoxExt;
+using SuperDog;
+using hydraw;
+namespace hydraw
+{
+public partial class hydForm : Form
+{
+private DogFeature feature = DogFeature.Default;
+private string scope = "<dogscope />";
+private bool login = false;
+private Dog dog = null;
+private const int picCount = 5;
+private PictureBox[] box = new PictureBox[picCount];
+public hydForm()
+{
+InitializeComponent();
+box[0] = pb1; box[1] = pb2; box[2] = pb3; box[3] = pb4; box[4] = pb5;
+byte ret = cs_image.CImage.Init("ColorTable");
+this.statusProg.Width = this.status.Width - this.statusLabel.Width - 25;
+VendorCode.Initialise();
+StatusMng.Form = this;
+}
+private void hydForm_LayoutPicControl()
+{
+Size size = new Size(); size.Width = panelImg.Width-20; size.Height = 250;
+Padding pad = new Padding(0);
+int y = 0;
+panelImg.Controls.Clear();
+pb1.Size = size; pb1.Margin = pad;
+pb1.Location = new Point(0, y);
+pb1.ContextMenuStrip = this.cmsPic;
+panelImg.Controls.Add(pb1);
+y += size.Height;
+pb2.Size = size; pb2.Margin = pad;
+pb2.Location = new Point(0, y);
+pb2.ContextMenuStrip = this.cmsPic;
+panelImg.Controls.Add(pb2);
+y += size.Height;
+pb3.Size = size; pb3.Margin = pad;
+pb3.Location = new Point(0, y);
+pb3.ContextMenuStrip = this.cmsPic;
+panelImg.Controls.Add(pb3);
+y += size.Height;
+pb4.Size = size; pb4.Margin = pad;
+pb4.Location = new Point(0, y);
+pb4.ContextMenuStrip = this.cmsPic;
+panelImg.Controls.Add(pb4);
+y += size.Height;
+pb5.Size = size; pb5.Margin = pad;
+pb5.Location = new Point(0, y);
+pb5.ContextMenuStrip = this.cmsPic;
+panelImg.Controls.Add(pb5);
+y += size.Height;
+}
+private void hydForm_FormClosing(object sender, FormClosingEventArgs e)
+{
+cs_image.CImage.Free();
+DogStatus status = dog.Logout();
+bool ret = dog.IsLoggedIn();
+Console.WriteLine(ret);
+dog.Dispose();
+dog = null;
+}
+private void hydForm_Load(object sender, EventArgs e)
+{
+hydForm_LayoutPicControl();
+dog = new Dog(new DogFeature(VendorCode.DataName - 10));
+DogStatus status = dog.Login(VendorCode.Code, scope);
+login = dog.IsLoggedIn();
+}
+private void bnFileSel_Click(object sender, EventArgs e)
+{
+OpenFileDialog fd = new OpenFileDialog();
+fd.Filter = "雨滴谱文件|*.hyd";
+fd.RestoreDirectory = false;
+fd.FilterIndex = 1;
+fd.Multiselect = true;
+if (fd.ShowDialog() == DialogResult.OK)
+{
+lbFile_Clear();
+for (int i = 0; i < fd.FileNames.Length; i++)
+{
+hydFile hf = new hydFile();
+hf.filename = fd.FileNames[i];
+hf.name = fd.SafeFileNames[i];
+System.IO.FileInfo fi = new FileInfo(hf.filename);
+double size = fi.Length / 1024.0 / 1024.0;
+fi = null;
+cxListBoxItem bi = new cxListBoxItem();
+bi.Text = String.Format("{0}({1}MB)", hf.name, size.ToString("F1"));
+bi.Tag = hf;
+lbFile.Items.Add(bi);
+}
+}
+}
+private unsafe void bnSaveImg_Click(object sender, EventArgs e)
+{
+hydFile hf = lbFile_Selected();
+if (null == hf || null == hf.mng) return;
+SaveFileDialog fd = new SaveFileDialog();
+fd.RestoreDirectory = false;
+fd.AddExtension = false;
+fd.FilterIndex = 1;
+fd.FileName = hf.name;
+fd.Filter = "图片文件(*.png)|*.png";
+if (fd.ShowDialog() == DialogResult.OK)
+{
+for (int i = 0; i < picCount; i++)
+{
+Image img = box[i].Image;
+if (null == img) continue;
+string name = System.IO.Path.GetFileNameWithoutExtension(fd.FileName);
+string path = System.IO.Path.GetDirectoryName(fd.FileName);
+string file = System.IO.Path.Combine(path, name);
+string filename = string.Format("{0}_{1}.png", file, i);
+img.Save(filename);
+}
+}
+}
+private unsafe void bnExportImage_Click(object sender, EventArgs e)
+{
+hydFile hf = lbFile_Selected();
+if (null == hf || null == hf.mng) return;
+hf.ExportImageData();
+}
+private unsafe void bnLoadSelect_Click(object sender, EventArgs e)
+{
+if (null == lbFile.SelectedItems || lbFile.SelectedItems.Count <= 0)
+{
+SetMessage("没有选中的数据，请重新选择");
+return;
+}
+List<hydFile> hflist = new List<hydFile>();
+foreach (cxListBoxItem bi in lbFile.SelectedItems)
+{
+hydFile hf = bi.Tag as hydFile;
+if (null == hf || null != hf.mng) continue;
+hflist.Add(hf);
+}
+if(hflist.Count <= 0)
+{
+SetMessage("选中的数据中已经全部加载了，无需重复加载");
+return;
+}
+ParameterizedThreadStart pts = new ParameterizedThreadStart(this.LoadData);
+Thread td = new Thread(pts);
+td.Start(hflist);
+}
+private unsafe void LoadData(object para)
+{
+List<hydFile> hflist = para as List<hydFile>;
+if (null == hflist || hflist.Count <= 0) return;
+if (false == CheckLogin())
+{
+Prompt(399);
+return;
+}
+SetProgress(0, hflist.Count);
+for (int i = 0; i < hflist.Count; i++)
+{
+SetMessage(String.Format("正在加载数据，请稍后{0}/{1}...", i+1, hflist.Count));
+hydFile hf = hflist[i];
+if (null != hf.mng) continue;
+hf.Load();
+SetProgress(i+1, hflist.Count);
+}
+SetMessage("全部加载完成，请点击浏览");
+}
+private bool CheckLogin()
+{
+return true;
+bool ret = dog.IsLoggedIn();
+if (false == ret)
+{
+DogStatus status = dog.Login(VendorCode.Code, scope);
+if (DogStatus.FeatureNotFound == status || DogStatus.FeatureExpired == status)
+{
+//Prompt(498);
+return false;
+}
+ret = dog.IsLoggedIn();
+}
+if (true == ret)
+{
+DateTime time = DateTime.Now;
+DogFeature dg = dog.Feature;
+DogStatus status = dog.GetTime(ref time);
+if (DogStatus.StatusOk != status) ret = false;
+}
+return ret;
+}
+private void Prompt(int index)
+{
+string msg = VendorCode.GetDataFile(index);
+MessageBox.Show(msg);
+}
+private void lbFile_Clear()
+{
+foreach (cxListBoxItem bi in lbFile.Items)
+{
+hydFile hf = bi.Tag as hydFile;
+hf.Free();
+}
+lbFile.Items.Clear();
+}
+private hydFile lbFile_Selected()
+{
+hydFile ret = null;
+if (null == lbFile.SelectedItems || lbFile.SelectedItems.Count <= 0)
+{
+return ret;
+}
+cxListBoxItem bi = lbFile.SelectedItems[0] as cxListBoxItem;
+ret = bi.Tag as hydFile;
+return ret;
+}
+private unsafe void lbFile_SelectedIndexChanged(object sender, EventArgs e)
+{
+hydFile hf = lbFile_Selected();
+if (null == hf)
+{
+statusLabel.Text = "未选中任何数据，请先左键单击选中";
+return;
+}
+if (null == hf.mng)
+{
+statusLabel.Text = "还未加载数据，请先右键单击加载数据";
+for (int i = 0; i < picCount; i++) box[i].Image = null;
+return;
+}
+if (false == CheckLogin())
+{
+Prompt(250);
+return;
+}
+hf.Draw(pb1.Width, pb1.Height);
+for (int i = 0; i < picCount; i++)
+{
+box[i].Image = hf.GetImage(i);
+}
+}
+private void cmsFileListLoad_Click(object sender, EventArgs e)
+{
+hydFile hf = lbFile_Selected();
+if (null == hf)
+{
+SetMessage("未选中任何数据，请先左键单击选中");
+return;
+}
+SetMessage("正在加载数据，请耐心等候...");
+if (false == CheckLogin())
+{
+Prompt(286);
+return;
+}
+DateTime now = DateTime.Now;
+hf.Load();
+hf.Draw(pb1.Width, pb1.Height);
+lbFile_SelectedIndexChanged(null, null);
+TimeSpan ts = new TimeSpan(DateTime.Now.Ticks - now.Ticks);
+SetMessage(String.Format("解析完成，耗时{0}秒", (int)ts.TotalSeconds));
+SetProgress(1, 1);
+}
+private void cmsFileListFree_Click(object sender, EventArgs e)
+{
+hydFile hf = lbFile_Selected();
+if (null == hf)
+{
+SetMessage("未选中任何数据，请先左键单击选中");
+return;
+}
+hf.Free();
+}
+private void cmsFileListExport_Click(object sender, EventArgs e)
+{
+hydFile hf = lbFile_Selected();
+if (null == hf)
+{
+SetMessage("未选中任何数据，请先左键单击选中");
+return;
+}
+hf.Export();
+}
+private void cmsPicCopy_Click(object sender, EventArgs e)
+{
+for (int i = 0; i < 4; i++)
+{
+Point p = panelImg.PointToClient(Control.MousePosition);
+if (box[i].Bounds.Contains(p))
+{
+Bitmap bit = new Bitmap(box[i].Image);
+Clipboard.SetImage(bit);
+break;
+}
+}
+}
+internal void SetProgress(int index, int allCount)
+{
+if (status.InvokeRequired)
+{
+SetProgressCallback m = new SetProgressCallback(SetProgress);
+status.Invoke(m, new object[] { index, allCount });
+}
+else
+{
+if (index != allCount) statusProg.Visible = true;
+else statusProg.Visible = false;
+statusProg.Value = (int)(index * 1.0f / allCount * 100.0f);
+}
+Application.DoEvents();
+}
+internal void SetMessage(string msg)
+{
+if (status.InvokeRequired)
+{
+SetMessageCallback m = new SetMessageCallback(SetMessage);
+status.Invoke(m, new object[] { msg });
+}
+else
+{
+statusLabel.Text = msg;
+}
+Application.DoEvents();
+}
+}
+public delegate void SetProgressCallback(int index, int allCount);
+public delegate void SetMessageCallback(string msg);
+}
+namespace hydraw
+{
+partial class hydForm
+{
+/// <summary>
+/// Required designer variable.
+/// </summary>
+private System.ComponentModel.IContainer components = null;
+/// <summary>
+/// Clean up any resources being used.
+/// </summary>
+/// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+protected override void Dispose(bool disposing)
+{
+if (disposing && (components != null))
+{
+components.Dispose();
+}
+base.Dispose(disposing);
+}
+#region Windows Form Designer generated code
+/// <summary>
+/// Required method for Designer support - do not modify
+/// the contents of this method with the code editor.
+/// </summary>
+private void InitializeComponent()
+{
+this.components = new System.ComponentModel.Container();
+this.bnFileSel = new System.Windows.Forms.Button();
+this.tlpForm = new System.Windows.Forms.TableLayoutPanel();
+this.panelLeft = new System.Windows.Forms.Panel();
+this.tlpLeft = new System.Windows.Forms.TableLayoutPanel();
+this.panelOpr = new System.Windows.Forms.Panel();
+this.bnExportImage = new System.Windows.Forms.Button();
+this.bnLoadSelect = new System.Windows.Forms.Button();
+this.bnSaveImg = new System.Windows.Forms.Button();
+this.lbFile = new cxControl.ListBoxExt.cxListBox();
+this.cmsFileList = new System.Windows.Forms.ContextMenuStrip(this.components);
+this.cmsFileListLoad = new System.Windows.Forms.ToolStripMenuItem();
+this.cmsFileListFree = new System.Windows.Forms.ToolStripMenuItem();
+this.cmsFileListExport = new System.Windows.Forms.ToolStripMenuItem();
+this.status = new System.Windows.Forms.StatusStrip();
+this.statusLabel = new System.Windows.Forms.ToolStripStatusLabel();
+this.statusProg = new System.Windows.Forms.ToolStripProgressBar();
+this.panelImg = new System.Windows.Forms.Panel();
+this.pb4 = new System.Windows.Forms.PictureBox();
+this.cmsPic = new System.Windows.Forms.ContextMenuStrip(this.components);
+this.cmsPicCopy = new System.Windows.Forms.ToolStripMenuItem();
+this.pb5 = new System.Windows.Forms.PictureBox();
+this.pb3 = new System.Windows.Forms.PictureBox();
+this.pb1 = new System.Windows.Forms.PictureBox();
+this.pb2 = new System.Windows.Forms.PictureBox();
+this.panelForm = new System.Windows.Forms.Panel();
+this.tlpForm.SuspendLayout();
+this.panelLeft.SuspendLayout();
+this.tlpLeft.SuspendLayout();
+this.panelOpr.SuspendLayout();
+this.cmsFileList.SuspendLayout();
+this.status.SuspendLayout();
+this.panelImg.SuspendLayout();
+((System.ComponentModel.ISupportInitialize)(this.pb4)).BeginInit();
+this.cmsPic.SuspendLayout();
+((System.ComponentModel.ISupportInitialize)(this.pb5)).BeginInit();
+((System.ComponentModel.ISupportInitialize)(this.pb3)).BeginInit();
+((System.ComponentModel.ISupportInitialize)(this.pb1)).BeginInit();
+((System.ComponentModel.ISupportInitialize)(this.pb2)).BeginInit();
+this.panelForm.SuspendLayout();
+this.SuspendLayout();
+//
+// bnFileSel
+//
+this.bnFileSel.Location = new System.Drawing.Point(3, 4);
+this.bnFileSel.Name = "bnFileSel";
+this.bnFileSel.Size = new System.Drawing.Size(64, 24);
+this.bnFileSel.TabIndex = 1;
+this.bnFileSel.Text = "选择文件";
+this.bnFileSel.UseVisualStyleBackColor = true;
+this.bnFileSel.Click += new System.EventHandler(this.bnFileSel_Click);
+//
+// tlpForm
+//
+this.tlpForm.ColumnCount = 2;
+this.tlpForm.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Absolute, 407F));
+this.tlpForm.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100F));
+this.tlpForm.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Absolute, 20F));
+this.tlpForm.Controls.Add(this.panelLeft, 0, 0);
+this.tlpForm.Controls.Add(this.panelImg, 1, 0);
+this.tlpForm.Dock = System.Windows.Forms.DockStyle.Fill;
+this.tlpForm.Location = new System.Drawing.Point(0, 0);
+this.tlpForm.Margin = new System.Windows.Forms.Padding(0);
+this.tlpForm.Name = "tlpForm";
+this.tlpForm.RowCount = 1;
+this.tlpForm.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 100F));
+this.tlpForm.Size = new System.Drawing.Size(1290, 962);
+this.tlpForm.TabIndex = 4;
+//
+// panelLeft
+//
+this.panelLeft.Controls.Add(this.tlpLeft);
+this.panelLeft.Controls.Add(this.status);
+this.panelLeft.Dock = System.Windows.Forms.DockStyle.Fill;
+this.panelLeft.Location = new System.Drawing.Point(0, 0);
+this.panelLeft.Margin = new System.Windows.Forms.Padding(0);
+this.panelLeft.Name = "panelLeft";
+this.panelLeft.Size = new System.Drawing.Size(407, 962);
+this.panelLeft.TabIndex = 0;
+//
+// tlpLeft
+//
+this.tlpLeft.ColumnCount = 1;
+this.tlpLeft.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100F));
+this.tlpLeft.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Absolute, 20F));
+this.tlpLeft.Controls.Add(this.panelOpr, 0, 0);
+this.tlpLeft.Controls.Add(this.lbFile, 0, 1);
+this.tlpLeft.Dock = System.Windows.Forms.DockStyle.Fill;
+this.tlpLeft.Location = new System.Drawing.Point(0, 0);
+this.tlpLeft.Margin = new System.Windows.Forms.Padding(0);
+this.tlpLeft.Name = "tlpLeft";
+this.tlpLeft.RowCount = 2;
+this.tlpLeft.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Absolute, 30F));
+this.tlpLeft.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 100F));
+this.tlpLeft.Size = new System.Drawing.Size(407, 940);
+this.tlpLeft.TabIndex = 4;
+//
+// panelOpr
+//
+this.panelOpr.Controls.Add(this.bnExportImage);
+this.panelOpr.Controls.Add(this.bnLoadSelect);
+this.panelOpr.Controls.Add(this.bnFileSel);
+this.panelOpr.Controls.Add(this.bnSaveImg);
+this.panelOpr.Dock = System.Windows.Forms.DockStyle.Fill;
+this.panelOpr.Location = new System.Drawing.Point(0, 0);
+this.panelOpr.Margin = new System.Windows.Forms.Padding(0);
+this.panelOpr.Name = "panelOpr";
+this.panelOpr.Size = new System.Drawing.Size(407, 30);
+this.panelOpr.TabIndex = 5;
+//
+// bnExportImage
+//
+this.bnExportImage.Location = new System.Drawing.Point(247, 4);
+this.bnExportImage.Name = "bnExportImage";
+this.bnExportImage.Size = new System.Drawing.Size(86, 24);
+this.bnExportImage.TabIndex = 5;
+this.bnExportImage.Text = "导出图形数据";
+this.bnExportImage.UseVisualStyleBackColor = true;
+this.bnExportImage.Click += new System.EventHandler(this.bnExportImage_Click);
+//
+// bnLoadSelect
+//
+this.bnLoadSelect.Location = new System.Drawing.Point(72, 4);
+this.bnLoadSelect.Name = "bnLoadSelect";
+this.bnLoadSelect.Size = new System.Drawing.Size(64, 24);
+this.bnLoadSelect.TabIndex = 4;
+this.bnLoadSelect.Text = "加载所选";
+this.bnLoadSelect.UseVisualStyleBackColor = true;
+this.bnLoadSelect.Click += new System.EventHandler(this.bnLoadSelect_Click);
+//
+// bnSaveImg
+//
+this.bnSaveImg.Location = new System.Drawing.Point(339, 4);
+this.bnSaveImg.Name = "bnSaveImg";
+this.bnSaveImg.Size = new System.Drawing.Size(64, 24);
+this.bnSaveImg.TabIndex = 3;
+this.bnSaveImg.Text = "保存图片";
+this.bnSaveImg.UseVisualStyleBackColor = true;
+this.bnSaveImg.Click += new System.EventHandler(this.bnSaveImg_Click);
+//
+// lbFile
+//
+this.lbFile.ContextMenuStrip = this.cmsFileList;
+this.lbFile.Dock = System.Windows.Forms.DockStyle.Fill;
+this.lbFile.DrawMode = System.Windows.Forms.DrawMode.OwnerDrawFixed;
+this.lbFile.FormattingEnabled = true;
+this.lbFile.ItemHeight = 25;
+this.lbFile.Location = new System.Drawing.Point(0, 30);
+this.lbFile.Margin = new System.Windows.Forms.Padding(0);
+this.lbFile.Name = "lbFile";
+this.lbFile.SelectionMode = System.Windows.Forms.SelectionMode.MultiExtended;
+this.lbFile.Size = new System.Drawing.Size(407, 904);
+this.lbFile.TabIndex = 0;
+this.lbFile.SelectedIndexChanged += new System.EventHandler(this.lbFile_SelectedIndexChanged);
+//
+// cmsFileList
+//
+this.cmsFileList.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+this.cmsFileListLoad,
+this.cmsFileListFree,
+this.cmsFileListExport});
+this.cmsFileList.Name = "cmsFileList";
+this.cmsFileList.Size = new System.Drawing.Size(125, 70);
+//
+// cmsFileListLoad
+//
+this.cmsFileListLoad.Name = "cmsFileListLoad";
+this.cmsFileListLoad.Size = new System.Drawing.Size(124, 22);
+this.cmsFileListLoad.Text = "加载数据";
+this.cmsFileListLoad.Click += new System.EventHandler(this.cmsFileListLoad_Click);
+//
+// cmsFileListFree
+//
+this.cmsFileListFree.Name = "cmsFileListFree";
+this.cmsFileListFree.Size = new System.Drawing.Size(124, 22);
+this.cmsFileListFree.Text = "释放数据";
+this.cmsFileListFree.Click += new System.EventHandler(this.cmsFileListFree_Click);
+//
+// cmsFileListExport
+//
+this.cmsFileListExport.Enabled = false;
+this.cmsFileListExport.Name = "cmsFileListExport";
+this.cmsFileListExport.Size = new System.Drawing.Size(124, 22);
+this.cmsFileListExport.Text = "导出数据";
+this.cmsFileListExport.ToolTipText = "下个版本发布";
+this.cmsFileListExport.Visible = false;
+this.cmsFileListExport.Click += new System.EventHandler(this.cmsFileListExport_Click);
+//
+// status
+//
+this.status.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+this.statusLabel,
+this.statusProg});
+this.status.Location = new System.Drawing.Point(0, 940);
+this.status.Name = "status";
+this.status.Size = new System.Drawing.Size(407, 22);
+this.status.TabIndex = 2;
+this.status.Text = "statusStrip1";
+//
+// statusLabel
+//
+this.statusLabel.AutoSize = false;
+this.statusLabel.Margin = new System.Windows.Forms.Padding(0);
+this.statusLabel.Name = "statusLabel";
+this.statusLabel.Size = new System.Drawing.Size(240, 22);
+//
+// statusProg
+//
+this.statusProg.AutoSize = false;
+this.statusProg.Name = "statusProg";
+this.statusProg.Size = new System.Drawing.Size(100, 16);
+this.statusProg.Visible = false;
+//
+// panelImg
+//
+this.panelImg.AutoScroll = true;
+this.panelImg.Controls.Add(this.pb4);
+this.panelImg.Controls.Add(this.pb5);
+this.panelImg.Controls.Add(this.pb3);
+this.panelImg.Controls.Add(this.pb1);
+this.panelImg.Controls.Add(this.pb2);
+this.panelImg.Dock = System.Windows.Forms.DockStyle.Fill;
+this.panelImg.Location = new System.Drawing.Point(407, 0);
+this.panelImg.Margin = new System.Windows.Forms.Padding(0);
+this.panelImg.Name = "panelImg";
+this.panelImg.Size = new System.Drawing.Size(883, 962);
+this.panelImg.TabIndex = 2;
+//
+// pb4
+//
+this.pb4.ContextMenuStrip = this.cmsPic;
+this.pb4.Location = new System.Drawing.Point(146, 538);
+this.pb4.Margin = new System.Windows.Forms.Padding(0);
+this.pb4.Name = "pb4";
+this.pb4.Size = new System.Drawing.Size(187, 200);
+this.pb4.TabIndex = 3;
+this.pb4.TabStop = false;
+//
+// cmsPic
+//
+this.cmsPic.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+this.cmsPicCopy});
+this.cmsPic.Name = "cmsFileList";
+this.cmsPic.Size = new System.Drawing.Size(125, 26);
+//
+// cmsPicCopy
+//
+this.cmsPicCopy.Name = "cmsPicCopy";
+this.cmsPicCopy.Size = new System.Drawing.Size(124, 22);
+this.cmsPicCopy.Text = "拷贝图片";
+this.cmsPicCopy.Click += new System.EventHandler(this.cmsPicCopy_Click);
+//
+// pb5
+//
+this.pb5.ContextMenuStrip = this.cmsPic;
+this.pb5.Location = new System.Drawing.Point(484, 648);
+this.pb5.Margin = new System.Windows.Forms.Padding(0);
+this.pb5.Name = "pb5";
+this.pb5.Size = new System.Drawing.Size(128, 77);
+this.pb5.TabIndex = 4;
+this.pb5.TabStop = false;
+//
+// pb3
+//
+this.pb3.ContextMenuStrip = this.cmsPic;
+this.pb3.Location = new System.Drawing.Point(47, 448);
+this.pb3.Margin = new System.Windows.Forms.Padding(0);
+this.pb3.Name = "pb3";
+this.pb3.Size = new System.Drawing.Size(501, 200);
+this.pb3.TabIndex = 2;
+this.pb3.TabStop = false;
+//
+// pb1
+//
+this.pb1.ContextMenuStrip = this.cmsPic;
+this.pb1.Location = new System.Drawing.Point(47, 9);
+this.pb1.Margin = new System.Windows.Forms.Padding(0);
+this.pb1.Name = "pb1";
+this.pb1.Size = new System.Drawing.Size(501, 200);
+this.pb1.TabIndex = 0;
+this.pb1.TabStop = false;
+//
+// pb2
+//
+this.pb2.ContextMenuStrip = this.cmsPic;
+this.pb2.Location = new System.Drawing.Point(38, 228);
+this.pb2.Margin = new System.Windows.Forms.Padding(0);
+this.pb2.Name = "pb2";
+this.pb2.Size = new System.Drawing.Size(501, 200);
+this.pb2.TabIndex = 1;
+this.pb2.TabStop = false;
+//
+// panelForm
+//
+this.panelForm.AutoScroll = true;
+this.panelForm.Controls.Add(this.tlpForm);
+this.panelForm.Dock = System.Windows.Forms.DockStyle.Fill;
+this.panelForm.Location = new System.Drawing.Point(0, 0);
+this.panelForm.Name = "panelForm";
+this.panelForm.Size = new System.Drawing.Size(1290, 962);
+this.panelForm.TabIndex = 5;
+//
+// hydForm
+//
+this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 12F);
+this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
+this.AutoScroll = true;
+this.ClientSize = new System.Drawing.Size(1290, 962);
+this.Controls.Add(this.panelForm);
+this.Name = "hydForm";
+this.Text = "二维视频雨滴谱仪数据处理分析软件";
+this.WindowState = System.Windows.Forms.FormWindowState.Maximized;
+this.Load += new System.EventHandler(this.hydForm_Load);
+this.FormClosing += new System.Windows.Forms.FormClosingEventHandler(this.hydForm_FormClosing);
+this.tlpForm.ResumeLayout(false);
+this.panelLeft.ResumeLayout(false);
+this.panelLeft.PerformLayout();
+this.tlpLeft.ResumeLayout(false);
+this.panelOpr.ResumeLayout(false);
+this.cmsFileList.ResumeLayout(false);
+this.status.ResumeLayout(false);
+this.status.PerformLayout();
+this.panelImg.ResumeLayout(false);
+((System.ComponentModel.ISupportInitialize)(this.pb4)).EndInit();
+this.cmsPic.ResumeLayout(false);
+((System.ComponentModel.ISupportInitialize)(this.pb5)).EndInit();
+((System.ComponentModel.ISupportInitialize)(this.pb3)).EndInit();
+((System.ComponentModel.ISupportInitialize)(this.pb1)).EndInit();
+((System.ComponentModel.ISupportInitialize)(this.pb2)).EndInit();
+this.panelForm.ResumeLayout(false);
+this.ResumeLayout(false);
+}
+#endregion
+private cxControl.ListBoxExt.cxListBox lbFile;
+private System.Windows.Forms.Button bnFileSel;
+private System.Windows.Forms.TableLayoutPanel tlpForm;
+private System.Windows.Forms.Panel panelLeft;
+private System.Windows.Forms.PictureBox pb4;
+private System.Windows.Forms.PictureBox pb3;
+private System.Windows.Forms.PictureBox pb2;
+private System.Windows.Forms.PictureBox pb1;
+private System.Windows.Forms.ContextMenuStrip cmsFileList;
+private System.Windows.Forms.ToolStripMenuItem cmsFileListLoad;
+private System.Windows.Forms.StatusStrip status;
+private System.Windows.Forms.ToolStripStatusLabel statusLabel;
+private System.Windows.Forms.ToolStripProgressBar statusProg;
+private System.Windows.Forms.Button bnSaveImg;
+private System.Windows.Forms.ContextMenuStrip cmsPic;
+private System.Windows.Forms.ToolStripMenuItem cmsPicCopy;
+private System.Windows.Forms.TableLayoutPanel tlpLeft;
+private System.Windows.Forms.Panel panelOpr;
+private System.Windows.Forms.Button bnLoadSelect;
+private System.Windows.Forms.ToolStripMenuItem cmsFileListFree;
+private System.Windows.Forms.ToolStripMenuItem cmsFileListExport;
+private System.Windows.Forms.PictureBox pb5;
+private System.Windows.Forms.Panel panelImg;
+private System.Windows.Forms.Panel panelForm;
+private System.Windows.Forms.Button bnExportImage;
+}
+}
+using System;
+using System.Collections.Generic;
+using System.Text;
+using System.Runtime.InteropServices;
+using System.IO;
+using System.Drawing;
+namespace hydraw
+{
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate void CallbackMessage(string message);
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate void CallbackProgress(int index, int count);
+public enum hydimg
+{
+HIT_INIT = 1,
+HIT_DM = 2,
+HIT_NW = 4,
+HIT_RR = 8,
+HIT_DBZ=16
+};
+public unsafe class hyd
+{
+public static Image GetImage(void* mng, int index)
+{
+Image img = null;
+byte* content = null;
+int size = DrawImage_Get(mng, &content, index);
+if (size > 0 && null != content)
+{
+img = BytesToImage(content, size);
+}
+if (null != content) FreeImageContent(content);
+return img;
+}
+public static Image BytesToImage(byte* content, int size)
+{
+Image img = null;
+byte[] by = new byte[size];
+for (int i = 0; i < size; i++) by[i] = content[i];
+MemoryStream ms = new MemoryStream(by);
+img = Bitmap.FromStream(ms);
+ms.Close();
+ms.Dispose();
+return img;
+}
+[DllImport("hyd.dll", EntryPoint = "hyddata_Init", CallingConvention = CallingConvention.Cdecl)]
+public static extern void* hyddata_Init(string datafile, string config, CallbackMessage cbmsg, CallbackProgress cbprog);
+[DllImport("hyd.dll", EntryPoint = "hyddata_Free")]
+public static extern void hyddata_Free(void* mng);
+[DllImport("hyd.dll", EntryPoint = "hyddata_Export")]
+public static extern byte hyddata_Export(void* mng, string filename);
+[DllImport("hyd.dll", EntryPoint = "hyddata_ExportData")]
+public static extern byte hyddata_ExportData(void* mng, string path, string filename);
+[DllImport("hyd.dll", EntryPoint = "hyddata_Image", CallingConvention = CallingConvention.Cdecl)]
+public static extern byte hyddata_Image(void* mng, int width, int height, int imgtype, CallbackMessage cbmsg, CallbackProgress cbprog);
+[DllImport("hyd.dll", EntryPoint = "hyddata_GetImage")]
+public static extern int DrawImage_Get(void* di, byte** img, int index);
+[DllImport("hyd.dll", EntryPoint = "FreeImageContent")]
+public static extern int FreeImageContent(byte* img);
+}
+}
+using System;
+using System.Collections.Generic;
+using System.Text;
+using System.Drawing;
+using System.Windows.Forms;
+namespace hydraw
+{
+public unsafe class hydFile
+{
+public string filename;
+public string name;
+public void* mng;
+public hydFile()
+{
+filename ="";
+name = "";
+mng = null;
+}
+public void Load()
+{
+if (null != mng) return;
+mng = hyd.hyddata_Init(filename, null, StatusMng.SetMessage, StatusMng.SetProgress);
+}
+public bool Draw(int width, int height)
+{
+bool ret = false;
+if (true == String.IsNullOrEmpty(filename)) return ret;
+if (null == mng) mng = hyd.hyddata_Init(filename, null, StatusMng.SetMessage, StatusMng.SetProgress);
+if (null == mng)
+{
+StatusMng.SetMessage("加载失败：" + filename);
+return ret;
+}
+int type = (int)(hydimg.HIT_INIT | hydimg.HIT_RR | hydimg.HIT_DM | hydimg.HIT_NW | hydimg.HIT_DBZ);
+byte by = hyd.hyddata_Image(mng, width, height, type, StatusMng.SetMessage, StatusMng.SetProgress);
+if (1 == by)
+{
+ret = true;
+}
+else
+{
+StatusMng.SetMessage("绘图失败：" + filename);
+}
+return ret;
+}
+public Image GetImage(int index)
+{
+Image img = hyd.GetImage(mng, index);
+return img;
+}
+public void Free()
+{
+if (null == mng) return;
+hyd.hyddata_Free(mng);
+mng = null;
+}
+public void Export()
+{
+if (null == mng)
+{
+MessageBox.Show("还没加载数据，请先加载数据", "信息提示");
+return;
+}
+SaveFileDialog fd = new SaveFileDialog();
+fd.Filter = "Csv文件(*.csv)|*.csv|所有文件(*.*)|*.*";
+fd.Title = "导出文件";
+fd.FileName = name;
+fd.RestoreDirectory = false;
+if (fd.ShowDialog() == DialogResult.OK)
+{
+byte ret = hyd.hyddata_Export(mng, fd.FileName);
+if (1 == ret)
+StatusMng.SetMessage("导出成功");
+else
+StatusMng.SetMessage("导出失败");
+}
+}
+public void ExportImageData()
+{
+if (null == mng)
+{
+MessageBox.Show("还没加载数据，请先加载数据", "信息提示");
+return;
+}
+SaveFileDialog fd = new SaveFileDialog();
+fd.RestoreDirectory = false;
+fd.AddExtension = false;
+fd.FilterIndex = 1;
+fd.FileName = name;
+fd.Filter = "CSV文件(*.csv)|*.csv";
+if (fd.ShowDialog() == DialogResult.OK)
+{
+string filename = System.IO.Path.GetFileNameWithoutExtension(fd.FileName);
+string path = System.IO.Path.GetDirectoryName(fd.FileName);
+byte ret = hyd.hyddata_ExportData(mng, path+"\\", filename);
+if (1 == ret)
+StatusMng.SetMessage("导出成功");
+else
+StatusMng.SetMessage("导出失败");
+}
+}
+}
+}
+using System;
+using System.Collections.Generic;
+using System.Text;
+namespace hydraw
+{
+public class StatusMng
+{
+public static hydForm Form;
+public static void SetProgress(int index, int allCount)
+{
+if (null != Form)
+Form.SetProgress(index, allCount);
+}
+public static void SetMessage(string msg)
+{
+if (null != Form)
+Form.SetMessage(msg);
+}
+}
+}
+using System;
+using System.Collections.Generic;
+using System.Windows.Forms;
+namespace hydraw
+{
+static class Program
+{
+/// <summary>
+/// The main entry point for the application.
+/// </summary>
+[STAThread]
+static void Main()
+{
+Application.EnableVisualStyles();
+Application.SetCompatibleTextRenderingDefault(false);
+Application.Run(new hydForm());
+}
+}
+}
