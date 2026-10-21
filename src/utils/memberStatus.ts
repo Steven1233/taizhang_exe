@@ -111,6 +111,23 @@ export function membersActiveDuring(members: Member[], meetings: Meeting[]): Mem
 }
 
 /**
+ * 判断人员在参考时点是否在职且已入职（V3.5.5：数据看板出勤率排行年度口径）
+ *
+ * 口径：
+ * - 未入职：首条状态记录日期（无状态历史时取创建日期）晚于参考时点 → 不计入
+ * - 状态追溯：isActiveAt 时间线判定（借调/调离/离职期间不计入，回归后恢复）
+ * - 无状态历史的旧数据按当前状态兜底（与 isActiveAt 一致）
+ */
+export function isActiveMemberAt(member: Member, refDate: string): boolean {
+  const history = member.statusHistory && member.statusHistory.length > 0
+    ? [...member.statusHistory].sort((a, b) => a.date.localeCompare(b.date))
+    : null;
+  const entryDate = history ? history[0].date : (member.createdAt || '').substring(0, 10);
+  if (entryDate && entryDate > refDate) return false; // 参考时点尚未入职
+  return isActiveAt(member, refDate);
+}
+
+/**
  * 统计参考时点在职的党员数（V3.5.2：数据看板「在职党员总数」年度口径）
  *
  * 口径（年报口径）：
@@ -120,14 +137,7 @@ export function membersActiveDuring(members: Member[], meetings: Meeting[]): Mem
  * - 无状态历史的旧数据按当前状态兜底（与 isActiveAt 一致）
  */
 export function countActiveMembersAt(members: Member[], refDate: string): number {
-  return members.filter((m) => {
-    const history = m.statusHistory && m.statusHistory.length > 0
-      ? [...m.statusHistory].sort((a, b) => a.date.localeCompare(b.date))
-      : null;
-    const entryDate = history ? history[0].date : (m.createdAt || '').substring(0, 10);
-    if (entryDate && entryDate > refDate) return false; // 参考时点尚未入库
-    return isActiveAt(m, refDate);
-  }).length;
+  return members.filter((m) => isActiveMemberAt(m, refDate)).length;
 }
 
 /**

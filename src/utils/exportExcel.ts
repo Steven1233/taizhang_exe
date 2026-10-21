@@ -145,6 +145,36 @@ export function groupStudyMeetingName(group: string, date: string): string {
   return month >= 1 && month <= 12 ? `${label}${month}月学习会` : `${label}学习会`;
 }
 
+/** 小组层面会议类型（V3.5.5：拆分到小组子表时仅展示这两类） */
+const GROUP_LEVEL_TYPES = ['党小组会', '主题党日活动'];
+
+/**
+ * 小组子表会议类型展示（V3.5.5）
+ *
+ * 套会记录被拆分到党小组会 / 主题党日活动子表时，仅保留小组层面的会议类型，
+ * 不再带出支部党员大会、党课、支委会等支部层面类型。
+ * 例：类型 [支部党员大会、党小组会、党课、主题党日活动]
+ *     → 党小组会子表显示「党小组会、主题党日活动」
+ * 非套会记录本身即单一小组类型，展示结果不变。
+ */
+export function groupSheetMeetingType(m: Meeting, sheetType: string): string {
+  const types = Array.isArray(m.type) ? m.type : [String(m.type)];
+  const kept = types.filter((t) => GROUP_LEVEL_TYPES.includes(t));
+  return (kept.length > 0 ? kept : [sheetType]).join('、');
+}
+
+/**
+ * 党小组当前组长姓名（V3.5.5）
+ * 党小组会子表的记录人统一取该组当前党小组组长；未标记组长时由调用方回退原记录人
+ */
+export function currentGroupLeaderName(members: Member[], group: string): string {
+  const target = group.trim();
+  const leader = members.find(
+    (m) => m.isGroupLeader && (m.partyGroup || '').trim() === target
+  );
+  return leader ? leader.name : '';
+}
+
 /** 参会者在会议日期所属党小组（V3.5.4：快照优先，旧数据按变更留痕回溯，最后回退当前值） */
 function partyGroupOfParticipant(p: Participant, meeting: Meeting, members: Member[]): string {
   if (p.partyGroupSnapshot !== undefined) return (p.partyGroupSnapshot || '').trim();
@@ -180,7 +210,8 @@ function buildMeetingRow(
   m: Meeting,
   seq: number,
   members: Member[],
-  scopeGroup?: string
+  scopeGroup?: string,
+  sheetType?: string
 ): (string | number)[] {
   // V3.5.4：党小组会子表中的套会行按该小组范围统计与展示
   const scoped = !!scopeGroup && isCombinedGroupMeeting(m);
@@ -219,16 +250,26 @@ function buildMeetingRow(
       : '';
   const name = scoped ? groupStudyMeetingName(scopeGroup!, m.date) : m.name || '-';
 
+  // V3.5.5：小组子表仅展示小组层面会议类型；党小组会子表记录人统一取本组当前组长
+  const typeText = sheetType
+    ? groupSheetMeetingType(m, sheetType)
+    : Array.isArray(m.type)
+      ? m.type.join('、')
+      : String(m.type);
+  const recorder = scopeGroup
+    ? currentGroupLeaderName(members, scopeGroup) || m.recorder || '-'
+    : m.recorder || '-';
+
   return [
     seq,
     name,
     m.date,
     m.time || '-',
-    Array.isArray(m.type) ? m.type.join('、') : String(m.type),
+    typeText,
     partyGroups,
     m.location,
     m.host,
-    m.recorder || '-',
+    recorder,
     m.topic,
     m.resolution || '',
     shouldAttend,
@@ -247,7 +288,8 @@ export function buildDetailSheet(
   subtitlePeriod: string,
   members: Member[],
   headerOverrides?: Record<string, string>,
-  scopeGroup?: string
+  scopeGroup?: string,
+  sheetType?: string
 ): XLSX.WorkSheet | null {
   if (meetings.length === 0) return null;
 
@@ -262,7 +304,7 @@ export function buildDetailSheet(
   ];
 
   meetings.forEach((m, i) => {
-    sheetData.push(buildMeetingRow(m, i + 1, members, scopeGroup));
+    sheetData.push(buildMeetingRow(m, i + 1, members, scopeGroup, sheetType));
   });
 
   // 合计行（V3.3：时间线在职口径；V3.5.4：套会按小组范围口径，与明细行自洽）
@@ -331,7 +373,10 @@ export function appendCategorySheets(
       (m) => (m.partyGroups || []).includes(group)
     );
     // V3.5.4：套会行按该小组范围过滤统计与名单，会议名称改为「第X党小组X月学习会」
-    const wsGroup = buildDetailSheet(groupMeetings, `${group}会`, subtitlePeriod, members, undefined, group);
+    // V3.5.5：会议类型仅展示小组层面类型，记录人统一取本组当前组长
+    const wsGroup = buildDetailSheet(
+      groupMeetings, `${group}会`, subtitlePeriod, members, undefined, group, '党小组会'
+    );
     if (wsGroup) XLSX.utils.book_append_sheet(wb, wsGroup, `${group}会`);
   });
 
@@ -352,9 +397,10 @@ export function appendCategorySheets(
 
   // 主题党日活动（V3.3 新增子表："会议议题"列改为"活动内容"）
   const partyDayMeetings = meetings.filter((m) => m.type.includes('主题党日活动'));
+  // V3.5.5：套会行会议类型仅展示小组层面类型（不再带出党员大会、党课等）
   const wsPartyDay = buildDetailSheet(partyDayMeetings, '主题党日活动', subtitlePeriod, members, {
     '会议议题': '活动内容',
-  });
+  }, undefined, '主题党日活动');
   if (wsPartyDay) XLSX.utils.book_append_sheet(wb, wsPartyDay, '主题党日活动');
 }
 

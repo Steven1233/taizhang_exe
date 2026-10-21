@@ -4,7 +4,8 @@
  *       版本号单一来源（package.json ↔ vite define 注入 ↔ Settings/backup）、单实例锁静态结构校验、
  *       V3.5.1 年份选择器数据驱动、V3.5.2 在职党员年度时点计数 + 出勤对比三维度统计、
  *       V3.5.3 组织架构模块（statusAt 时间线 + buildOrgChart 四层树）、
- *       V3.5.4 党小组会子表套会按小组过滤（名称改写 / 人数 / 出勤率 / 名单）
+ *       V3.5.4 党小组会子表套会按小组过滤（名称改写 / 人数 / 出勤率 / 名单）、
+ *       V3.5.5 小组子表仅展示小组层面类型 + 记录人取本组组长 + 排行年度状态过滤
  * 运行：V=$(node -p "JSON.stringify(require('./package.json').version)") && \
  *       npx esbuild scripts/v35-test.ts --bundle --platform=node --format=cjs \
  *         --define:__APP_VERSION__="$V" --outfile=/tmp/v35-test.cjs && node /tmp/v35-test.cjs
@@ -16,9 +17,12 @@ import fs from 'fs';
 import path from 'path';
 import type { Meeting, Member } from '../src/types';
 import { buildMonthStackSeries, buildDimensionAttendanceRates } from '../src/utils/chartSeries';
-import { countActiveMembersAt, isActiveAt, statusAt, partyGroupAt } from '../src/utils/memberStatus';
+import { countActiveMembersAt, isActiveMemberAt, isActiveAt, statusAt, partyGroupAt } from '../src/utils/memberStatus';
 import { buildOrgChart, ORG_UNGROUPED } from '../src/utils/orgChart';
-import { isCombinedGroupMeeting, groupStudyMeetingName, buildDetailSheet } from '../src/utils/exportExcel';
+import {
+  isCombinedGroupMeeting, groupStudyMeetingName, groupSheetMeetingType,
+  currentGroupLeaderName, buildDetailSheet,
+} from '../src/utils/exportExcel';
 import * as XLSX from 'xlsx-js-style';
 import { APP_VERSION } from '../src/utils/backup';
 
@@ -476,6 +480,111 @@ function testV354GroupSheetScope() {
   check('非套会对全量名单不做状态过滤（原有行为不变）', rows3[3][16], '参会：甲一、甲二');
 }
 
+// ==================== [12] V3.5.5 小组子表展示口径 + 排行年度状态 ====================
+
+function testV355GroupSheetDisplayAndRanking() {
+  console.log('\n[24] 小组子表会议类型：仅保留党小组会 / 主题党日活动');
+  const fullCombined = mkMeeting({
+    id: 'e1', date: '2025-05-20', type: ['支部党员大会', '党小组会', '党课', '主题党日活动'],
+    partyGroups: ['第一党小组'],
+  });
+  check('多类型套会 → 党小组会、主题党日活动', groupSheetMeetingType(fullCombined, '党小组会'), '党小组会、主题党日活动');
+  const groupWithLecture = mkMeeting({
+    id: 'e2', date: '2025-05-20', type: ['党小组会', '党课'], partyGroups: ['第一党小组'],
+  });
+  check('党课不带入党小组子表', groupSheetMeetingType(groupWithLecture, '党小组会'), '党小组会');
+  const pureGroup = mkMeeting({
+    id: 'e3', date: '2025-05-20', type: ['党小组会'], partyGroups: ['第一党小组'],
+  });
+  check('独立小组会类型不变', groupSheetMeetingType(pureGroup, '党小组会'), '党小组会');
+  const partyDayCombined = mkMeeting({
+    id: 'e4', date: '2025-05-20', type: ['支部党员大会', '党课', '主题党日活动'],
+  });
+  check('主题党日套会 → 仅主题党日活动', groupSheetMeetingType(partyDayCombined, '主题党日活动'), '主题党日活动');
+
+  console.log('\n[25] 党小组会子表记录人：本组当前组长');
+  const members: Member[] = [
+    mkMember({ id: 'l1', name: '甲组长', partyGroup: '第一党小组', isGroupLeader: true }),
+    mkMember({ id: 'l2', name: '甲组员', partyGroup: '第一党小组' }),
+    mkMember({ id: 'l3', name: '乙组长', partyGroup: '第二党小组', isGroupLeader: true }),
+  ];
+  check('第一组组长', currentGroupLeaderName(members, '第一党小组'), '甲组长');
+  check('无组长的小组返回空', currentGroupLeaderName(members, '第三党小组'), '');
+
+  const pure = mkMeeting({
+    id: 'e5', date: '2025-06-18', type: ['党小组会'], partyGroups: ['第一党小组'],
+    recorder: '原记录人',
+    participants: [{ memberId: 'l1', name: '甲组长', status: 'attended', isTemporary: false }],
+  });
+  const wsPure = buildDetailSheet(
+    [pure], '第一党小组会', '统计时间段：2025年', members, undefined, '第一党小组', '党小组会'
+  )!;
+  const pureRows = XLSX.utils.sheet_to_json(wsPure, { header: 1, raw: false }) as string[][];
+  check('独立小组会记录人改写为本组组长', pureRows[3][8], '甲组长');
+  check('独立小组会会议类型不变', pureRows[3][4], '党小组会');
+
+  const combined = mkMeeting({
+    id: 'e6', date: '2025-05-20', type: ['支部党员大会', '党小组会', '党课'],
+    partyGroups: ['第一党小组', '第二党小组'], recorder: '原记录人',
+    participants: [
+      { memberId: 'l1', name: '甲组长', status: 'attended', isTemporary: false, partyGroupSnapshot: '第一党小组' },
+      { memberId: 'l2', name: '甲组员', status: 'attended', isTemporary: false, partyGroupSnapshot: '第一党小组' },
+      { memberId: 'l3', name: '乙组长', status: 'attended', isTemporary: false, partyGroupSnapshot: '第二党小组' },
+    ],
+  });
+  const wsCombined = buildDetailSheet(
+    [combined], '第一党小组会', '统计时间段：2025年', members, undefined, '第一党小组', '党小组会'
+  )!;
+  const combinedRows = XLSX.utils.sheet_to_json(wsCombined, { header: 1, raw: false }) as string[][];
+  check('套会行会议类型仅党小组会', combinedRows[3][4], '党小组会');
+  check('套会行记录人取本组组长', combinedRows[3][8], '甲组长');
+  check('套会行名称仍为小组学习会', combinedRows[3][1], '第一党小组5月学习会');
+
+  console.log('\n[26] 出勤率排行：按所选年份状态过滤（未入职 / 不在职不显示）');
+  const people: Member[] = [
+    mkMember({ id: 'r1', name: '在职', statusHistory: [{ status: 'active', date: '2024-01-15' }] }),
+    mkMember({
+      id: 'r2', name: '2025年入职', createdAt: '2025-06-01T00:00:00',
+      statusHistory: [{ status: 'active', date: '2025-06-01' }],
+    }),
+    mkMember({
+      id: 'r3', name: '2025年调离', status: 'transferred',
+      statusHistory: [{ status: 'active', date: '2024-01-15' }, { status: 'transferred', date: '2025-03-01' }],
+    }),
+    mkMember({
+      id: 'r4', name: '借调中',
+      statusHistory: [{ status: 'active', date: '2024-01-15' }, { status: 'seconded', date: '2025-03-01' }],
+    }),
+    mkMember({
+      id: 'r5', name: '借调回归',
+      statusHistory: [
+        { status: 'active', date: '2024-01-15' },
+        { status: 'seconded', date: '2025-03-01' },
+        { status: 'active', date: '2025-09-01' },
+      ],
+    }),
+    mkMember({
+      id: 'r6', name: '2024年后调离', status: 'transferred',
+      statusHistory: [{ status: 'active', date: '2024-01-15' }, { status: 'transferred', date: '2025-06-01' }],
+    }),
+  ];
+  const namesAt = (refDate: string) => people.filter((m) => isActiveMemberAt(m, refDate)).map((m) => m.name);
+  check(
+    '2024 年末：未入职者不显示，当年在职者显示',
+    namesAt('2024-12-31'),
+    ['在职', '2025年调离', '借调中', '借调回归', '2024年后调离']
+  );
+  check(
+    '2025 年末：调离/借调中不显示，借调回归恢复显示',
+    namesAt('2025-12-31'),
+    ['在职', '2025年入职', '借调回归']
+  );
+
+  const dash = readProjectFile('src/pages/Dashboard.tsx');
+  check('排行使用年度参考时点判定', dash.includes('isActiveMemberAt(member, activeRefDate)'), true);
+  check('排行不再按当前状态硬过滤', dash.includes(".filter((member) => member.status === 'active')"), false);
+}
+
 // ==================== 主流程 ====================
 
 async function main() {
@@ -491,6 +600,7 @@ async function main() {
   testBuildOrgChart();
   testV353Static();
   testV354GroupSheetScope();
+  testV355GroupSheetDisplayAndRanking();
 
   console.log('\n========== 结果 ==========');
   console.log(`通过: ${pass}，失败: ${fail}`);

@@ -5,7 +5,7 @@ import ReactECharts from 'echarts-for-react';
 import { db, normalizeMeetingTypes, normalizeMeetingPartyGroups, normalizeMember } from '../db';
 import { addLog } from '../utils/logHelper';
 import { exportDashboardReport } from '../utils/exportWord';
-import { countActiveAttendance, membersActiveDuring, isActiveAt, countActiveMembersAt } from '../utils/memberStatus';
+import { countActiveAttendance, membersActiveDuring, isActiveAt, countActiveMembersAt, isActiveMemberAt } from '../utils/memberStatus';
 import { buildMonthStackSeries, buildDimensionAttendanceRates, type AttendanceDimension } from '../utils/chartSeries';
 import type { Meeting, Member, TalkRecord } from '../types';
 import { MEETING_TYPES, typeMeetingUnits, meetingTotalUnits } from '../types';
@@ -112,9 +112,10 @@ export default function Dashboard() {
 
   // 出勤率排行 - 降序排列，并构建详细统计
   // V3.3：时间线在职口径——行范围为"年内任一会议日期时点在职"的人员，每场会议按该场日期单独判定计入
-  // V3.4 功能10：排行仅显示当前在职人员（调离/借调/离职者不出现，状态恢复在职后自动重新出现）
+  // V3.5.5：按所选年份的参考时点（当前年份=截至目前，其他年份=年末）判定在职与入职状态，
+  //         不在职（调离/借调/离职）及该年份尚未入职的人员不显示
   const memberStats = membersActiveDuring(members, yearMeetings)
-    .filter((member) => member.status === 'active')
+    .filter((member) => isActiveMemberAt(member, activeRefDate))
     .map((member) => {
       let total = 0;
       let attended = 0;
@@ -511,8 +512,9 @@ export default function Dashboard() {
                 <Tooltip
                   title={
                     <div>
-                      <div>仅显示当前在职人员；调离 / 借调 / 离职者不参与排行，</div>
-                      <div>状态恢复在职后自动重新出现。</div>
+                      <div>按所选年份人员状态判定：仅显示该年度在职且已入职人员；</div>
+                      <div>调离 / 借调 / 离职及该年份尚未入职者不参与排行，状态恢复在职后自动重新出现。</div>
+                      <div>参考时点：当前年份取截至目前，其他年份取该年 12 月 31 日。</div>
                     </div>
                   }
                 >
