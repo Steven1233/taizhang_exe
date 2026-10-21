@@ -145,16 +145,16 @@ export function groupStudyMeetingName(group: string, date: string): string {
   return month >= 1 && month <= 12 ? `${label}${month}月学习会` : `${label}学习会`;
 }
 
-/** 小组层面会议类型（V3.5.5：拆分到小组子表时仅展示这两类） */
-const GROUP_LEVEL_TYPES = ['党小组会', '主题党日活动'];
+/** 小组层面会议类型（V3.5.5：拆分到小组子表时仅展示这三类） */
+const GROUP_LEVEL_TYPES = ['党小组会', '主题党日活动', '组织生活会'];
 
 /**
  * 小组子表会议类型展示（V3.5.5）
  *
  * 套会记录被拆分到党小组会 / 主题党日活动子表时，仅保留小组层面的会议类型，
  * 不再带出支部党员大会、党课、支委会等支部层面类型。
- * 例：类型 [支部党员大会、党小组会、党课、主题党日活动]
- *     → 党小组会子表显示「党小组会、主题党日活动」
+ * 例：类型 [支部党员大会、党小组会、党课、主题党日活动、组织生活会]
+ *     → 党小组会子表显示「党小组会、主题党日活动、组织生活会」
  * 非套会记录本身即单一小组类型，展示结果不变。
  */
 export function groupSheetMeetingType(m: Meeting, sheetType: string): string {
@@ -248,7 +248,12 @@ function buildMeetingRow(
     : m.partyGroups && m.partyGroups.length > 0
       ? m.partyGroups.join('、')
       : '';
-  const name = scoped ? groupStudyMeetingName(scopeGroup!, m.date) : m.name || '-';
+  // V3.5.5 修订：仅多小组联合开展时才改写为「第X党小组X月学习会」；
+  // 没有其他小组参加的会议沿用原会议名称
+  const groupCount = new Set((m.partyGroups || []).filter(Boolean)).size;
+  const name = scoped && groupCount > 1
+    ? groupStudyMeetingName(scopeGroup!, m.date)
+    : m.name || '-';
 
   // V3.5.5：小组子表仅展示小组层面会议类型；党小组会子表记录人统一取本组当前组长
   const typeText = sheetType

@@ -483,12 +483,17 @@ function testV354GroupSheetScope() {
 // ==================== [12] V3.5.5 小组子表展示口径 + 排行年度状态 ====================
 
 function testV355GroupSheetDisplayAndRanking() {
-  console.log('\n[24] 小组子表会议类型：仅保留党小组会 / 主题党日活动');
+  console.log('\n[24] 小组子表会议类型：仅保留党小组会 / 主题党日活动 / 组织生活会');
   const fullCombined = mkMeeting({
-    id: 'e1', date: '2025-05-20', type: ['支部党员大会', '党小组会', '党课', '主题党日活动'],
+    id: 'e1', date: '2025-05-20',
+    type: ['支部党员大会', '党小组会', '党课', '主题党日活动', '组织生活会'],
     partyGroups: ['第一党小组'],
   });
-  check('多类型套会 → 党小组会、主题党日活动', groupSheetMeetingType(fullCombined, '党小组会'), '党小组会、主题党日活动');
+  check(
+    '多类型套会 → 党小组会、主题党日活动、组织生活会',
+    groupSheetMeetingType(fullCombined, '党小组会'),
+    '党小组会、主题党日活动、组织生活会'
+  );
   const groupWithLecture = mkMeeting({
     id: 'e2', date: '2025-05-20', type: ['党小组会', '党课'], partyGroups: ['第一党小组'],
   });
@@ -538,7 +543,19 @@ function testV355GroupSheetDisplayAndRanking() {
   const combinedRows = XLSX.utils.sheet_to_json(wsCombined, { header: 1, raw: false }) as string[][];
   check('套会行会议类型仅党小组会', combinedRows[3][4], '党小组会');
   check('套会行记录人取本组组长', combinedRows[3][8], '甲组长');
-  check('套会行名称仍为小组学习会', combinedRows[3][1], '第一党小组5月学习会');
+  check('多小组联合参加 → 改写为小组学习会', combinedRows[3][1], '第一党小组5月学习会');
+
+  const singleGroupCombined = mkMeeting({
+    id: 'e7', date: '2025-07-16', type: ['党小组会', '党课', '组织生活会'],
+    partyGroups: ['第一党小组'], name: '第一党小组7月专题组织生活会', recorder: '原记录人',
+    participants: [{ memberId: 'l1', name: '甲组长', status: 'attended', isTemporary: false }],
+  });
+  const wsSingle = buildDetailSheet(
+    [singleGroupCombined], '第一党小组会', '统计时间段：2025年', members, undefined, '第一党小组', '党小组会'
+  )!;
+  const singleRows = XLSX.utils.sheet_to_json(wsSingle, { header: 1, raw: false }) as string[][];
+  check('无其他小组参加 → 沿用原有会议名称', singleRows[3][1], '第一党小组7月专题组织生活会');
+  check('会议类型保留小组层面三类', singleRows[3][4], '党小组会、组织生活会');
 
   console.log('\n[26] 出勤率排行：按所选年份状态过滤（未入职 / 不在职不显示）');
   const people: Member[] = [
