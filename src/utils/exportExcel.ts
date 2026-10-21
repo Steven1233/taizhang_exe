@@ -1,8 +1,8 @@
 import * as XLSX from 'xlsx-js-style';
 import dayjs from 'dayjs';
-import type { Meeting, Member } from '../types';
+import type { Meeting, Member, Participant } from '../types';
 import { sortPartyGroups, typeMeetingUnits, meetingTotalUnits } from '../types';
-import { countActiveAttendance, membersActiveDuring, isActiveAt } from './memberStatus';
+import { countActiveAttendance, countAttendanceOf, membersActiveDuring, isActiveAt, partyGroupAt } from './memberStatus';
 
 // ==================== 样式辅助 ====================
 
@@ -125,17 +125,78 @@ export const DETAIL_HEADERS = [
 /** 台账明细列宽（导出供组长模板复用） */
 export const DETAIL_COL_WIDTHS = [6, 24, 12, 14, 18, 14, 22, 10, 10, 30, 30, 8, 8, 8, 8, 8, 50];
 
+/**
+ * 套会判定（V3.5.4）
+ * 非党小组独立开展：一条记录套开多个会议类型，或多个党小组联合开展
+ */
+export function isCombinedGroupMeeting(m: Meeting): boolean {
+  const types = Array.isArray(m.type) ? m.type : [String(m.type)];
+  const groups = (m.partyGroups || []).filter(Boolean);
+  return types.length > 1 || groups.length > 1;
+}
+
+/**
+ * 套会在党小组会子表中的会议名称（V3.5.4）
+ * 例：第一党小组 + 2025-05-20 → 「第一党小组5月学习会」
+ */
+export function groupStudyMeetingName(group: string, date: string): string {
+  const month = Number(date.substring(5, 7));
+  const label = group.endsWith('党小组') ? group : `${group}党小组`;
+  return month >= 1 && month <= 12 ? `${label}${month}月学习会` : `${label}学习会`;
+}
+
+/** 参会者在会议日期所属党小组（V3.5.4：快照优先，旧数据按变更留痕回溯，最后回退当前值） */
+function partyGroupOfParticipant(p: Participant, meeting: Meeting, members: Member[]): string {
+  if (p.partyGroupSnapshot !== undefined) return (p.partyGroupSnapshot || '').trim();
+  const member = members.find((mm) => mm.id === p.memberId);
+  return member ? partyGroupAt(member, meeting.date) : '';
+}
+
+/** 参会者是否属于指定小组范围（V3.5.4：排除临时人员与会议日期时点非在职人员） */
+function inGroupScope(p: Participant, meeting: Meeting, members: Member[], group: string): boolean {
+  if (p.isTemporary) return false;
+  if (partyGroupOfParticipant(p, meeting, members) !== group) return false;
+  const member = members.find((mm) => mm.id === p.memberId);
+  return !!member && isActiveAt(member, meeting.date);
+}
+
+/**
+ * 出勤统计口径（V3.5.4）
+ * 套会行按小组范围统计；独立开展的党小组会/其他子表沿用全场口径
+ */
+function computeAttendance(
+  m: Meeting,
+  members: Member[],
+  scopeGroup?: string
+): { shouldAttend: number; attended: number; leave: number; absent: number } {
+  if (scopeGroup && isCombinedGroupMeeting(m)) {
+    return countAttendanceOf(m, members, (p) => inGroupScope(p, m, members, scopeGroup));
+  }
+  return countActiveAttendance(m, members);
+}
+
 /** 构建一行会议数据（V3.3：出勤统计按时间线在职口径；名单按"参会/请假/缺席"分栏换行） */
-function buildMeetingRow(m: Meeting, seq: number, members: Member[]): (string | number)[] {
-  // V3.3：按会议日期时点判定在职，离开期间不计入考勤统计；临时人员不计入
-  const { shouldAttend, attended, leave, absent } = countActiveAttendance(m, members);
+function buildMeetingRow(
+  m: Meeting,
+  seq: number,
+  members: Member[],
+  scopeGroup?: string
+): (string | number)[] {
+  // V3.5.4：党小组会子表中的套会行按该小组范围统计与展示
+  const scoped = !!scopeGroup && isCombinedGroupMeeting(m);
+  const stats = computeAttendance(m, members, scoped ? scopeGroup : undefined);
+  const { shouldAttend, attended, leave, absent } = stats;
   const rate = shouldAttend > 0 ? ((attended / shouldAttend) * 100).toFixed(1) + '%' : '-';
 
   // V3.3：参会人员名单按状态分栏换行（参会 = 出席 + 列席）
+  // V3.5.4：套会行仅列该小组范围内、会议日期时点在职的人员
+  const listSource = scoped
+    ? m.participants.filter((p) => inGroupScope(p, m, members, scopeGroup!))
+    : m.participants;
   const attendedNames: string[] = [];
   const leaveNames: string[] = [];
   const absentNames: string[] = [];
-  m.participants.forEach((p) => {
+  listSource.forEach((p) => {
     if (p.status === 'leave') {
       leaveNames.push(p.leaveReason ? `${p.name}(${p.leaveReason})` : p.name);
     } else if (p.status === 'absent') {
@@ -150,11 +211,17 @@ function buildMeetingRow(m: Meeting, seq: number, members: Member[]): (string | 
   if (absentNames.length > 0) listParts.push(`缺席：${absentNames.join('、')}`);
   const attendeeList = listParts.join('\n');
 
-  const partyGroups = m.partyGroups && m.partyGroups.length > 0 ? m.partyGroups.join('、') : '';
+  // 套会行的所属党小组只展示当前小组；会议名称改为「第X党小组X月学习会」
+  const partyGroups = scoped
+    ? scopeGroup!
+    : m.partyGroups && m.partyGroups.length > 0
+      ? m.partyGroups.join('、')
+      : '';
+  const name = scoped ? groupStudyMeetingName(scopeGroup!, m.date) : m.name || '-';
 
   return [
     seq,
-    m.name || '-',
+    name,
     m.date,
     m.time || '-',
     Array.isArray(m.type) ? m.type.join('、') : String(m.type),
@@ -179,7 +246,8 @@ export function buildDetailSheet(
   subtitlePrefix: string,
   subtitlePeriod: string,
   members: Member[],
-  headerOverrides?: Record<string, string>
+  headerOverrides?: Record<string, string>,
+  scopeGroup?: string
 ): XLSX.WorkSheet | null {
   if (meetings.length === 0) return null;
 
@@ -194,16 +262,16 @@ export function buildDetailSheet(
   ];
 
   meetings.forEach((m, i) => {
-    sheetData.push(buildMeetingRow(m, i + 1, members));
+    sheetData.push(buildMeetingRow(m, i + 1, members, scopeGroup));
   });
 
-  // 合计行（V3.3：时间线在职口径）
+  // 合计行（V3.3：时间线在职口径；V3.5.4：套会按小组范围口径，与明细行自洽）
   let totalAll = 0;
   let totalAttended = 0;
   let totalLeave = 0;
   let totalAbsent = 0;
   meetings.forEach((m) => {
-    const { shouldAttend, attended, leave, absent } = countActiveAttendance(m, members);
+    const { shouldAttend, attended, leave, absent } = computeAttendance(m, members, scopeGroup);
     totalAll += shouldAttend;
     totalAttended += attended;
     totalLeave += leave;
@@ -262,7 +330,8 @@ export function appendCategorySheets(
     const groupMeetings = groupMeetingMeetings.filter(
       (m) => (m.partyGroups || []).includes(group)
     );
-    const wsGroup = buildDetailSheet(groupMeetings, `${group}会`, subtitlePeriod, members);
+    // V3.5.4：套会行按该小组范围过滤统计与名单，会议名称改为「第X党小组X月学习会」
+    const wsGroup = buildDetailSheet(groupMeetings, `${group}会`, subtitlePeriod, members, undefined, group);
     if (wsGroup) XLSX.utils.book_append_sheet(wb, wsGroup, `${group}会`);
   });
 

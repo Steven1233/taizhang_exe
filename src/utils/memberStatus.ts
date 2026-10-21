@@ -40,6 +40,54 @@ export function statusAt(member: Member, date: string): MemberStatus {
 }
 
 /**
+ * 人员指定日期时点所属党小组（V3.5.4：党小组会子表套会按小组过滤）
+ *
+ * 口径（严谨性）：
+ * - 快照优先由调用方处理（participant.partyGroupSnapshot）
+ * - 无快照时按「信息变更留痕」中党小组变更日期回溯，
+ *   避免人员后续调组后旧会议记录被整组误归属
+ * - 无变更留痕：沿用当前党小组
+ */
+export function partyGroupAt(member: Member, date: string): string {
+  const logs = (member.changeHistory || [])
+    .filter((h) => h.field === '党小组')
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (logs.length === 0) return (member.partyGroup || '').trim();
+  const effective = logs.filter((h) => h.date <= date);
+  if (effective.length > 0) return (effective[effective.length - 1].newValue || '').trim();
+  // 早于首条变更：沿用首条变更前的值
+  return (logs[0].oldValue || '').trim();
+}
+
+/**
+ * 按指定参会者子集统计出勤（V3.5.4：党小组会子表套会按小组过滤）
+ *
+ * 口径同 countActiveAttendance：
+ * - 临时人员不计入
+ * - 按会议日期时点判定在职（调离/借调/离职期间不计入，回归后恢复）
+ */
+export function countAttendanceOf(
+  meeting: Meeting,
+  members: Member[],
+  include: (p: Meeting['participants'][number]) => boolean = (p) => !p.isTemporary
+): { shouldAttend: number; attended: number; leave: number; absent: number } {
+  let shouldAttend = 0;
+  let attended = 0;
+  let leave = 0;
+  let absent = 0;
+  meeting.participants.forEach((p) => {
+    if (!include(p)) return;
+    const m = members.find((mm) => mm.id === p.memberId);
+    if (!m || !isActiveAt(m, meeting.date)) return;
+    shouldAttend++;
+    if (p.status === 'attended') attended++;
+    else if (p.status === 'leave') leave++;
+    else absent++;
+  });
+  return { shouldAttend, attended, leave, absent };
+}
+
+/**
  * 统计一场会议的出勤（V3.3 时间线在职口径）
  *
  * 仅统计按会议日期时点判定为在职的正式成员：
@@ -51,20 +99,7 @@ export function countActiveAttendance(
   meeting: Meeting,
   members: Member[]
 ): { shouldAttend: number; attended: number; leave: number; absent: number } {
-  let shouldAttend = 0;
-  let attended = 0;
-  let leave = 0;
-  let absent = 0;
-  meeting.participants.forEach((p) => {
-    if (p.isTemporary) return;
-    const m = members.find((mm) => mm.id === p.memberId);
-    if (!m || !isActiveAt(m, meeting.date)) return;
-    shouldAttend++;
-    if (p.status === 'attended') attended++;
-    else if (p.status === 'leave') leave++;
-    else absent++;
-  });
-  return { shouldAttend, attended, leave, absent };
+  return countAttendanceOf(meeting, members);
 }
 
 /**

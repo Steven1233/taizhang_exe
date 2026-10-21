@@ -3,7 +3,8 @@
  * 覆盖：月度趋势系列纯函数（空白年份→空数组 / 各类型计次 / 套会拆分 / 年份过滤 / 无数据类型剔除）、
  *       版本号单一来源（package.json ↔ vite define 注入 ↔ Settings/backup）、单实例锁静态结构校验、
  *       V3.5.1 年份选择器数据驱动、V3.5.2 在职党员年度时点计数 + 出勤对比三维度统计、
- *       V3.5.3 组织架构模块（statusAt 时间线 + buildOrgChart 四层树）
+ *       V3.5.3 组织架构模块（statusAt 时间线 + buildOrgChart 四层树）、
+ *       V3.5.4 党小组会子表套会按小组过滤（名称改写 / 人数 / 出勤率 / 名单）
  * 运行：V=$(node -p "JSON.stringify(require('./package.json').version)") && \
  *       npx esbuild scripts/v35-test.ts --bundle --platform=node --format=cjs \
  *         --define:__APP_VERSION__="$V" --outfile=/tmp/v35-test.cjs && node /tmp/v35-test.cjs
@@ -15,8 +16,10 @@ import fs from 'fs';
 import path from 'path';
 import type { Meeting, Member } from '../src/types';
 import { buildMonthStackSeries, buildDimensionAttendanceRates } from '../src/utils/chartSeries';
-import { countActiveMembersAt, isActiveAt, statusAt } from '../src/utils/memberStatus';
+import { countActiveMembersAt, isActiveAt, statusAt, partyGroupAt } from '../src/utils/memberStatus';
 import { buildOrgChart, ORG_UNGROUPED } from '../src/utils/orgChart';
+import { isCombinedGroupMeeting, groupStudyMeetingName, buildDetailSheet } from '../src/utils/exportExcel';
+import * as XLSX from 'xlsx-js-style';
 import { APP_VERSION } from '../src/utils/backup';
 
 // ==================== 断言工具 ====================
@@ -391,6 +394,88 @@ function testV353Static() {
   check('组长标签与置顶', comp.includes('组长') && comp.includes('org-star'), true);
 }
 
+// ==================== [11] V3.5.4 党小组会子表套会过滤 ====================
+
+function testV354GroupSheetScope() {
+  console.log('\n[20] 套会判定与小组学习会名称');
+  const pureGroup = mkMeeting({ id: 'c1', date: '2025-05-20', type: ['党小组会'], partyGroups: ['第一党小组'] });
+  const combined = mkMeeting({ id: 'c2', date: '2025-05-20', type: ['党小组会', '党课'], partyGroups: ['第一党小组', '第二党小组'] });
+  const jointGroup = mkMeeting({ id: 'c3', date: '2025-05-20', type: ['党小组会'], partyGroups: ['第一党小组', '第二党小组'] });
+  check('独立开展（单类型单小组）→ 非套会', isCombinedGroupMeeting(pureGroup), false);
+  check('多类型套开 → 套会', isCombinedGroupMeeting(combined), true);
+  check('多小组联合开展 → 套会', isCombinedGroupMeeting(jointGroup), true);
+  check('名称：第一党小组 5 月', groupStudyMeetingName('第一党小组', '2025-05-20'), '第一党小组5月学习会');
+  check('名称：第二党小组 12 月', groupStudyMeetingName('第二党小组', '2025-12-01'), '第二党小组12月学习会');
+  check('名称：自定义小组名补「党小组」', groupStudyMeetingName('综合', '2025-03-08'), '综合党小组3月学习会');
+
+  console.log('\n[21] partyGroupAt：党小组按日期回溯（无快照旧数据口径）');
+  const moved = mkMember({
+    id: 'pg1', name: '调组人员', partyGroup: '第二党小组',
+    changeHistory: [{ date: '2025-06-10', field: '党小组', oldValue: '第一党小组', newValue: '第二党小组' }],
+  });
+  check('变更前时点 → 旧小组', partyGroupAt(moved, '2025-05-01'), '第一党小组');
+  check('变更后时点 → 新小组', partyGroupAt(moved, '2025-07-01'), '第二党小组');
+  check('无变更留痕 → 当前小组', partyGroupAt(mkMember({ id: 'pg2', name: '普通', partyGroup: '第三党小组' }), '2025-05-01'), '第三党小组');
+
+  console.log('\n[22] 党小组会子表：套会行按小组范围过滤');
+  const members: Member[] = [
+    mkMember({ id: 'g1', name: '甲一', partyGroup: '第一党小组' }),
+    mkMember({ id: 'g2', name: '甲二', partyGroup: '第一党小组' }),
+    mkMember({ id: 'g3', name: '甲三', partyGroup: '第一党小组' }),
+    mkMember({ id: 'g4', name: '乙一', partyGroup: '第二党小组' }),
+    mkMember({ id: 'g5', name: '乙二', partyGroup: '第二党小组' }),
+    // 会议日期前已借调 → 不计入应到与名单
+    mkMember({ id: 'g6', name: '甲借调', partyGroup: '第一党小组', statusHistory: [{ status: 'active', date: '2024-01-15' }, { status: 'seconded', date: '2025-04-01' }] }),
+  ];
+  const mtg = mkMeeting({
+    id: 'm354', date: '2025-05-20', type: ['党小组会', '党课'], partyGroups: ['第一党小组', '第二党小组'],
+    name: '套开会议',
+    participants: [
+      { memberId: 'g1', name: '甲一', status: 'attended', isTemporary: false, partyGroupSnapshot: '第一党小组' },
+      { memberId: 'g2', name: '甲二', status: 'leave', isTemporary: false, leaveReason: '病假', partyGroupSnapshot: '第一党小组' },
+      { memberId: 'g3', name: '甲三', status: 'absent', isTemporary: false, partyGroupSnapshot: '第一党小组' },
+      { memberId: 'g4', name: '乙一', status: 'attended', isTemporary: false, partyGroupSnapshot: '第二党小组' },
+      { memberId: 'g5', name: '乙二', status: 'attended', isTemporary: false, partyGroupSnapshot: '第二党小组' },
+      { memberId: 'g6', name: '甲借调', status: 'attended', isTemporary: false, partyGroupSnapshot: '第一党小组' },
+      { memberId: 'tmp', name: '临时人员', status: 'attended', isTemporary: true },
+    ],
+  });
+  const ws1 = buildDetailSheet([mtg], '第一党小组会', '统计时间段：2025年', members, undefined, '第一党小组')!;
+  const rows1 = XLSX.utils.sheet_to_json(ws1, { header: 1, raw: false }) as string[][];
+  const row1 = rows1[3];
+  check('套会行会议名称改为小组学习会', row1[1], '第一党小组5月学习会');
+  check('所属党小组仅本组', row1[5], '第一党小组');
+  check('应到 3（排除借调/临时/他组）', Number(row1[11]), 3);
+  check('实到 1', Number(row1[12]), 1);
+  check('请假 1', Number(row1[13]), 1);
+  check('缺席 1', Number(row1[14]), 1);
+  check('出勤率 33.3%', row1[15], '33.3%');
+  check('名单仅本组且不含借调/他组', row1[16], '参会：甲一\n请假：甲二(病假)\n缺席：甲三');
+  check('合计行与明细自洽', [Number(rows1[4][11]), Number(rows1[4][12]), Number(rows1[4][13]), Number(rows1[4][14]), rows1[4][15]], [3, 1, 1, 1, '33.3%']);
+
+  const ws2 = buildDetailSheet([mtg], '第二党小组会', '统计时间段：2025年', members, undefined, '第二党小组')!;
+  const rows2 = XLSX.utils.sheet_to_json(ws2, { header: 1, raw: false }) as string[][];
+  check('第二组应到 2', Number(rows2[3][11]), 2);
+  check('第二组实到 2', Number(rows2[3][12]), 2);
+  check('第二组出勤率 100.0%', rows2[3][15], '100.0%');
+  check('第二组名单仅本组', rows2[3][16], '参会：乙一、乙二');
+
+  console.log('\n[23] 独立开展的党小组会：保持原有名称与全场口径');
+  const pure = mkMeeting({
+    id: 'p354', date: '2025-06-18', type: ['党小组会'], partyGroups: ['第一党小组'], name: '第一党小组6月党小组会',
+    participants: [
+      { memberId: 'g1', name: '甲一', status: 'attended', isTemporary: false },
+      { memberId: 'g2', name: '甲二', status: 'attended', isTemporary: false },
+    ],
+  });
+  const ws3 = buildDetailSheet([pure], '第一党小组会', '统计时间段：2025年', members, undefined, '第一党小组')!;
+  const rows3 = XLSX.utils.sheet_to_json(ws3, { header: 1, raw: false }) as string[][];
+  check('非套会保留原会议名称', rows3[3][1], '第一党小组6月党小组会');
+  check('非套会所属党小组按记录展示', rows3[3][5], '第一党小组');
+  check('非套会应到 2', Number(rows3[3][11]), 2);
+  check('非套会对全量名单不做状态过滤（原有行为不变）', rows3[3][16], '参会：甲一、甲二');
+}
+
 // ==================== 主流程 ====================
 
 async function main() {
@@ -405,6 +490,7 @@ async function main() {
   testStatusAt();
   testBuildOrgChart();
   testV353Static();
+  testV354GroupSheetScope();
 
   console.log('\n========== 结果 ==========');
   console.log(`通过: ${pass}，失败: ${fail}`);
