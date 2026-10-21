@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx-js-style';
 import dayjs from 'dayjs';
 import type { Meeting, Member, Participant } from '../types';
 import { sortPartyGroups, typeMeetingUnits, meetingTotalUnits } from '../types';
-import { countActiveAttendance, countAttendanceOf, membersActiveDuring, isActiveAt, partyGroupAt } from './memberStatus';
+import { countActiveAttendance, countAttendanceOf, attendanceStatsMembers, isActiveAt, partyGroupAt } from './memberStatus';
 
 // ==================== 样式辅助 ====================
 
@@ -446,9 +446,9 @@ export async function exportAnnualLedger(
     headers2,
   ];
 
-  // V3.3：时间线在职口径——行范围为"统计期内任一会议日期时点在职"的人员
-  // （含期内已调离、借调中、借调回归者，保证历史台账出勤数据完整）
-  const scopedMembers = membersActiveDuring(members, yearMeetings);
+  // V3.3：时间线在职口径——含期内已调离、借调中、借调回归者，保证历史台账出勤数据完整
+  // V3.5.5：行范围改为统计时段内曾在职的人员，时段末尚未入职/期内从未在职者不列入
+  const scopedMembers = attendanceStatsMembers(members, start, end);
   const memberStats = scopedMembers.map((member) => {
     let shouldAttend = 0;
     let attended = 0;

@@ -17,7 +17,10 @@ import fs from 'fs';
 import path from 'path';
 import type { Meeting, Member } from '../src/types';
 import { buildMonthStackSeries, buildDimensionAttendanceRates } from '../src/utils/chartSeries';
-import { countActiveMembersAt, isActiveMemberAt, isActiveAt, statusAt, partyGroupAt } from '../src/utils/memberStatus';
+import {
+  countActiveMembersAt, isActiveMemberAt, isActiveDuring, attendanceStatsMembers,
+  hasEnteredBy, isActiveAt, statusAt, partyGroupAt,
+} from '../src/utils/memberStatus';
 import { buildOrgChart, ORG_UNGROUPED } from '../src/utils/orgChart';
 import {
   isCombinedGroupMeeting, groupStudyMeetingName, groupSheetMeetingType,
@@ -602,6 +605,65 @@ function testV355GroupSheetDisplayAndRanking() {
   check('排行不再按当前状态硬过滤', dash.includes(".filter((member) => member.status === 'active')"), false);
 }
 
+// ==================== [13] V3.5.5 参会考勤统计时段范围 ====================
+
+function testV355AttendanceStatsScope() {
+  console.log('\n[27] 参会考勤统计：统计时段内不在的人员不列入');
+  const members: Member[] = [
+    mkMember({ id: 't1', name: '全程在职' }),
+    mkMember({
+      id: 't2', name: '期内入职', createdAt: '2025-06-01T00:00:00',
+      statusHistory: [{ status: 'active', date: '2025-06-01' }],
+    }),
+    mkMember({
+      id: 't3', name: '期后入职', createdAt: '2026-02-01T00:00:00',
+      statusHistory: [{ status: 'active', date: '2026-02-01' }],
+    }),
+    mkMember({
+      id: 't4', name: '期前调离', status: 'transferred',
+      statusHistory: [{ status: 'active', date: '2024-01-15' }, { status: 'transferred', date: '2024-12-01' }],
+    }),
+    mkMember({
+      id: 't5', name: '期内调离', status: 'transferred',
+      statusHistory: [{ status: 'active', date: '2024-01-15' }, { status: 'transferred', date: '2025-08-01' }],
+    }),
+    mkMember({
+      id: 't6', name: '全年借调',
+      statusHistory: [{ status: 'active', date: '2024-01-15' }, { status: 'seconded', date: '2024-12-01' }],
+    }),
+    mkMember({
+      id: 't7', name: '期内借调回归',
+      statusHistory: [
+        { status: 'active', date: '2024-01-15' },
+        { status: 'seconded', date: '2025-03-01' },
+        { status: 'active', date: '2025-10-01' },
+      ],
+    }),
+  ];
+  const start = '2025-01-01';
+  const end = '2025-12-31';
+  check('期后入职 → 不在统计时段内', isActiveDuring(members[2], start, end), false);
+  check('期前调离 → 不在统计时段内', isActiveDuring(members[3], start, end), false);
+  check('全年借调 → 不在统计时段内', isActiveDuring(members[5], start, end), false);
+  check('期内入职 → 列入', isActiveDuring(members[1], start, end), true);
+  check('期内调离 → 列入（保留历史出勤）', isActiveDuring(members[4], start, end), true);
+  check('期内借调回归 → 列入', isActiveDuring(members[6], start, end), true);
+
+  check(
+    '统计时段行范围',
+    attendanceStatsMembers(members, start, end).map((m) => m.name),
+    ['全程在职', '期内入职', '期内调离', '期内借调回归']
+  );
+  check(
+    '时段末已入职判定',
+    [hasEnteredBy(members[1], end), hasEnteredBy(members[2], end)],
+    [true, false]
+  );
+
+  const exportSrc = readProjectFile('src/utils/exportExcel.ts');
+  check('参会考勤统计使用时段在职行范围', exportSrc.includes('attendanceStatsMembers(members, start, end)'), true);
+}
+
 // ==================== 主流程 ====================
 
 async function main() {
@@ -618,6 +680,7 @@ async function main() {
   testV353Static();
   testV354GroupSheetScope();
   testV355GroupSheetDisplayAndRanking();
+  testV355AttendanceStatsScope();
 
   console.log('\n========== 结果 ==========');
   console.log(`通过: ${pass}，失败: ${fail}`);

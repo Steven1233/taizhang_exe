@@ -110,6 +110,20 @@ export function membersActiveDuring(members: Member[], meetings: Meeting[]): Mem
   return members.filter((m) => meetings.some((mtg) => isActiveAt(m, mtg.date)));
 }
 
+/** 人员入职/入库日期（首条状态记录日期，无状态历史时取创建日期） */
+function entryDateOf(member: Member): string {
+  const history = member.statusHistory && member.statusHistory.length > 0
+    ? [...member.statusHistory].sort((a, b) => a.date.localeCompare(b.date))
+    : null;
+  return history ? history[0].date : (member.createdAt || '').substring(0, 10);
+}
+
+/** 人员在参考时点是否已入职（V3.5.5：统计时段行范围与看板排行共用） */
+export function hasEnteredBy(member: Member, refDate: string): boolean {
+  const entryDate = entryDateOf(member);
+  return !entryDate || entryDate <= refDate;
+}
+
 /**
  * 判断人员在参考时点是否在职且已入职（V3.5.5：数据看板出勤率排行年度口径）
  *
@@ -119,12 +133,34 @@ export function membersActiveDuring(members: Member[], meetings: Meeting[]): Mem
  * - 无状态历史的旧数据按当前状态兜底（与 isActiveAt 一致）
  */
 export function isActiveMemberAt(member: Member, refDate: string): boolean {
-  const history = member.statusHistory && member.statusHistory.length > 0
-    ? [...member.statusHistory].sort((a, b) => a.date.localeCompare(b.date))
-    : null;
-  const entryDate = history ? history[0].date : (member.createdAt || '').substring(0, 10);
-  if (entryDate && entryDate > refDate) return false; // 参考时点尚未入职
+  if (!hasEnteredBy(member, refDate)) return false; // 参考时点尚未入职
   return isActiveAt(member, refDate);
+}
+
+/**
+ * 人员是否在统计时段内任一时点在职（V3.5.5：参会考勤统计行范围）
+ *
+ * 口径：
+ * - 时段末尚未入职 → 不在统计时段内，排除
+ * - 时段内任一时点状态为在职 → 列入；借调/调离/离职期间不计为在职，
+ *   但期内恢复在职仍列入（保留历史台账出勤数据完整性）
+ * - 判定点：入职日或时段起点、时段终点、时段内每次状态变更日期
+ */
+export function isActiveDuring(member: Member, start: string, end: string): boolean {
+  if (!hasEnteredBy(member, end)) return false;
+  const entryDate = entryDateOf(member);
+  const from = entryDate && entryDate > start ? entryDate : start;
+  if (from > end) return false;
+  const dates = new Set<string>([from, end]);
+  (member.statusHistory || []).forEach((c) => {
+    if (c.date >= from && c.date <= end) dates.add(c.date);
+  });
+  return [...dates].some((d) => isActiveAt(member, d));
+}
+
+/** 参会考勤统计行范围（V3.5.5：仅列入统计时段内曾在职的人员） */
+export function attendanceStatsMembers(members: Member[], start: string, end: string): Member[] {
+  return members.filter((m) => isActiveDuring(m, start, end));
 }
 
 /**
